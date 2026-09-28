@@ -1,103 +1,96 @@
-# ma_window = 20, bias_buy = -0.02, exit_bias = 0.0
+#R
 
 import os
 import pandas as pd
 import numpy as np
 
 def run_signal5_baseline():
-    csv_filename = 'BTCUSDT-1h-2026-08.csv'
-    possible_paths = [
-        os.path.join('data', csv_filename),
-        os.path.join('..', 'data', csv_filename),
-        os.path.join('..', '..', 'data', csv_filename),
-        os.path.join(os.path.dirname(__file__), 'data', csv_filename),
-        os.path.join(os.path.dirname(__file__), '..', 'data', csv_filename),
-        os.path.join(os.path.dirname(__file__), '..', '..', 'data', csv_filename)
-    ]
-    
-    csv_path = None
-    for p in possible_paths:
-        if os.path.exists(p):
-            csv_path = p
-            break
-            
-    if not csv_path:
-        raise FileNotFoundError(f"File {csv_filename} not found.")
+    data_path = 'data/BTCUSDT-1h-2026-08.csv'
+    if not os.path.exists(data_path):
+        data_path = '../../data/BTCUSDT-1h-2026-08.csv'
 
-    # 1. Load data with proper columns for raw Binance K-line CSV
     columns = [
         'open_time', 'open', 'high', 'low', 'close', 'volume',
         'close_time', 'quote_volume', 'trades', 'taker_base_vol',
         'taker_quote_vol', 'ignore'
     ]
-    df = pd.read_csv(csv_path, header=None, names=columns)
+    df = pd.read_csv(data_path, header=None, names=columns)
 
-    # Numeric conversion
     for col in ['open', 'high', 'low', 'close', 'volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
 
-    # Fix: Use 'us' (microseconds) instead of 'ms' to prevent OutOfBoundsDatetime error
     df['open_time'] = pd.to_datetime(df['open_time'], unit='us', errors='coerce')
     df = df.sort_values('open_time').reset_index(drop=True)
 
-    # 2. Strategy parameters
+    # Strategy parameters
     ma_window = 20
     bias_buy = -0.02
-    stop_loss = 0.015
-    taker_fee = 0.001
-    initial_balance = 100000.0
+    stop_loss_pct = 0.015
+    fee_rate = 0.001
 
-    # 3. Calculate indicators
+    # Indicators
     df['ma'] = df['close'].rolling(window=ma_window).mean()
     df['bias'] = (df['close'] - df['ma']) / df['ma']
 
-    # 4. Backtest execution
-    balance = initial_balance
-    position = 0.0
+    position = 0
     entry_price = 0.0
-    trades = []
+    equity = [1.0]
+    trades_count = 0
 
-    for i in range(ma_window, len(df)):
-        current_close = df.loc[i, 'close']
-        current_bias = df.loc[i, 'bias']
-        current_ma = df.loc[i, 'ma']
+    for i in range(1, len(df)):
+        prev_bias = df['bias'].iloc[i-1]
+        prev_close_price = df['close'].iloc[i-1]
+        prev_ma = df['ma'].iloc[i-1]
+        
+        current_open = df['open'].iloc[i]
+        current_low = df['low'].iloc[i]
+        current_close = df['close'].iloc[i]
+        current_equity = equity[-1]
 
-        # Check exit if in position
-        if position > 0:
-            # Stop Loss
-            if current_close <= entry_price * (1 - stop_loss):
-                exit_price = current_close
-                trade_pnl = (exit_price - entry_price) / entry_price - (2 * taker_fee)
-                balance *= (1 + trade_pnl)
-                trades.append({'type': 'SL', 'pnl': trade_pnl})
-                position = 0.0
-                entry_price = 0.0
-
-            # Exit Condition: Close >= MA
-            elif current_close >= current_ma:
-                exit_price = current_close
-                trade_pnl = (exit_price - entry_price) / entry_price - (2 * taker_fee)
-                balance *= (1 + trade_pnl)
-                trades.append({'type': 'TP_MA', 'pnl': trade_pnl})
-                position = 0.0
-                entry_price = 0.0
-
-        # Check entry if flat
+        if position == 1:
+            sl_price = entry_price * (1 - stop_loss_pct)
+            # Check Stop Loss
+            if current_low <= sl_price:
+                ret = (sl_price - prev_close_price) / prev_close_price
+                current_equity *= (1 + ret) * (1 - fee_rate)
+                position = 0
+                trades_count += 1
+            # Check MA Reversion Exit (Close >= MA)
+            elif prev_close_price >= prev_ma:
+                ret = (current_open - prev_close_price) / prev_close_price
+                current_equity *= (1 + ret) * (1 - fee_rate)
+                position = 0
+                trades_count += 1
+            else:
+                ret = (current_close - prev_close_price) / prev_close_price
+                current_equity *= (1 + ret)
         elif position == 0:
-            if current_bias <= bias_buy:
-                position = 1.0
-                entry_price = current_close
+            if prev_bias <= bias_buy:
+                position = 1
+                entry_price = current_open
+                trades_count += 1
+                current_equity *= (1 - fee_rate)
+                ret = (current_close - current_open) / current_open
+                current_equity *= (1 + ret)
 
-    # 5. Output results
-    total_return = (balance - initial_balance) / initial_balance * 100
-    print("==================================================")
+        equity.append(current_equity)
+
+    df['equity'] = equity
+
+    # Performance calculation
+    daily_equity = df['equity'].iloc[::24]
+    daily_returns = daily_equity.pct_change().dropna()
+
+    total_return = (df['equity'].iloc[-1] - 1) * 100
+    sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(365) if daily_returns.std() > 0 else 0.0
+
+    print("\n==================================================")
     print("Signal 5: MA Reversion - Baseline")
     print("==================================================")
-    print(f"Initial Balance : ${initial_balance:,.2f}")
-    print(f"Final Balance   : ${balance:,.2f}")
-    print(f"Total Return    : {total_return:.2f}%")
-    print(f"Total Trades    : {len(trades)}")
-    print("==================================================")
+    print(f"Cumulative Return: {total_return:.2f}%")
+    print(f"Annualized Sharpe Ratio: {sharpe_ratio:.2f}")
+    print(f"Total Trades Triggered: {trades_count}")
+    print("==================================================\n")
 
 if __name__ == "__main__":
     run_signal5_baseline()

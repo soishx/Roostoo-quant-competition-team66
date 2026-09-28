@@ -1,10 +1,10 @@
-# z_window = 50, z_buy = -2.5
+#R
 
+import os
 import pandas as pd
 import numpy as np
-import os
 
-# 1. Load market data (Binance raw CSV without header)
+# 1. Load market data
 data_path = 'data/BTCUSDT-1h-2026-08.csv'
 if not os.path.exists(data_path):
     data_path = '../../data/BTCUSDT-1h-2026-08.csv'
@@ -16,90 +16,81 @@ column_names = [
 ]
 
 df = pd.read_csv(data_path, header=None, names=column_names)
-df['open_time'] = pd.to_datetime(df['open_time'], unit='us')
+for col in ['open', 'high', 'low', 'close', 'volume']:
+    df[col] = pd.to_numeric(df[col], errors='coerce')
+
+df['open_time'] = pd.to_datetime(df['open_time'], unit='us', errors='coerce')
 df = df.sort_values('open_time').reset_index(drop=True)
 
-# 2. Strategy parameters (Variant B: 50h Window & Extreme Threshold -2.5)
-return_period = 1       # Period for return calculation (1h)
-z_window = 50           # Extended rolling window for Z-Score calculation (50h)
-z_buy = -2.5            # Strict extreme oversold buy threshold (-2.5)
-z_exit = 0.0            # Mean reversion exit threshold
-stop_loss_pct = 0.015   # 1.5% Stop Loss
-fee_rate = 0.001        # 0.1% Taker fee per trade
+# 2. Strategy parameters (Variant B: Extended Window 50h & Threshold -2.5)
+return_period = 1
+z_window = 50
+z_buy = -2.5
+z_exit = 0.0
+stop_loss_pct = 0.015
+fee_rate = 0.001
 
-# 3. Indicator calculation: Return & Z-Score
+# 3. Indicator calculation
 df['returns'] = df['close'].pct_change(return_period)
 df['ret_mean'] = df['returns'].rolling(window=z_window).mean()
 df['ret_std'] = df['returns'].rolling(window=z_window).std()
 df['z_score'] = (df['returns'] - df['ret_mean']) / df['ret_std']
 
-# 4. Backtesting engine logic
-initial_balance = 100000.0
-balance = initial_balance
-position = 0          # 0: Out of market, 1: Long position
+# 4. Rigorous event-driven simulation
+position = 0
 entry_price = 0.0
-trades = []
+equity = [1.0]
+trades_count = 0
 
-for i in range(z_window + 1, len(df)):
-    current_price = df.loc[i, 'close']
-    current_time = df.loc[i, 'open_time']
-    current_z = df.loc[i, 'z_score']
-    
-    # Entry logic
-    if position == 0:
-        if current_z < z_buy:
+for i in range(1, len(df)):
+    prev_z = df['z_score'].iloc[i-1]
+    current_open = df['open'].iloc[i]
+    current_low = df['low'].iloc[i]
+    current_close = df['close'].iloc[i]
+    prev_close = df['close'].iloc[i-1]
+    current_equity = equity[-1]
+
+    if position == 1:
+        sl_price = entry_price * (1 - stop_loss_pct)
+        # Check intra-bar Stop Loss
+        if current_low <= sl_price:
+            ret = (sl_price - prev_close) / prev_close
+            current_equity *= (1 + ret) * (1 - fee_rate)
+            position = 0
+            trades_count += 1
+        # Check Z-Score Reversion Exit
+        elif prev_z >= z_exit:
+            ret = (current_open - prev_close) / prev_close
+            current_equity *= (1 + ret) * (1 - fee_rate)
+            position = 0
+            trades_count += 1
+        else:
+            ret = (current_close - prev_close) / prev_close
+            current_equity *= (1 + ret)
+    elif position == 0:
+        if prev_z < z_buy:
             position = 1
-            entry_price = current_price
-            balance *= (1 - fee_rate)
-            trades.append({
-                'type': 'BUY',
-                'time': current_time,
-                'price': entry_price,
-                'z_score': current_z,
-                'balance': balance
-            })
-            
-    # Exit logic
-    elif position == 1:
-        price_change = (current_price - entry_price) / entry_price
-        
-        # Stop loss trigger (1.5%)
-        if price_change <= -stop_loss_pct:
-            position = 0
-            exit_price = entry_price * (1 - stop_loss_pct)
-            balance *= (1 - stop_loss_pct) * (1 - fee_rate)
-            trades.append({
-                'type': 'SELL_SL',
-                'time': current_time,
-                'price': exit_price,
-                'z_score': current_z,
-                'reason': 'Stop Loss 1.5%',
-                'balance': balance
-            })
-            
-        # Z-Score mean reversion trigger
-        elif current_z >= z_exit:
-            position = 0
-            exit_price = current_price
-            balance *= (1 + price_change) * (1 - fee_rate)
-            trades.append({
-                'type': 'SELL_SIGNAL',
-                'time': current_time,
-                'price': exit_price,
-                'z_score': current_z,
-                'reason': 'Z-Score Reversion',
-                'balance': balance
-            })
+            entry_price = current_open
+            trades_count += 1
+            current_equity *= (1 - fee_rate)
+            ret = (current_close - current_open) / current_open
+            current_equity *= (1 + ret)
 
-# 5. Performance summary
-total_return = (balance - initial_balance) / initial_balance * 100
-total_trades = len([t for t in trades if t['type'].startswith('SELL')])
+    equity.append(current_equity)
 
-print("=" * 55)
-print("Signal 4: Extreme Return Reversal - Variant B Results")
-print("=" * 55)
-print(f"Initial Balance : ${initial_balance:,.2f}")
-print(f"Final Balance   : ${balance:,.2f}")
-print(f"Total Return    : {total_return:+.2f}%")
-print(f"Total Trades    : {total_trades}")
-print("=" * 55)
+df['equity'] = equity
+
+# 5. Standard performance metrics
+daily_equity = df['equity'].iloc[::24]
+daily_returns = daily_equity.pct_change().dropna()
+
+total_return = (df['equity'].iloc[-1] - 1) * 100
+sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(365) if daily_returns.std() > 0 else 0.0
+
+print("\n==================================================")
+print("Signal 4 Variant B: Strict Extreme Threshold (-2.5, 50h)")
+print("==================================================")
+print(f"Cumulative Return: {total_return:.2f}%")
+print(f"Annualized Sharpe Ratio: {sharpe_ratio:.2f}")
+print(f"Total Trades Triggered: {trades_count}")
+print("==================================================\n")
