@@ -1,20 +1,29 @@
-# ma_window = 20, bias_buy = -0.01, exit_bias = 0.0
+#R
 
 import os
+import glob
 import pandas as pd
 import numpy as np
 
 def run_signal5_variant_b():
-    data_path = 'data/BTCUSDT-1h-2026-08.csv'
-    if not os.path.exists(data_path):
-        data_path = '../../data/BTCUSDT-1h-2026-08.csv'
-
     columns = [
         'open_time', 'open', 'high', 'low', 'close', 'volume',
         'close_time', 'quote_volume', 'trades', 'taker_base_vol',
         'taker_quote_vol', 'ignore'
     ]
-    df = pd.read_csv(data_path, header=None, names=columns)
+
+    # 自动扫描并拼接所有 BTCUSDT 1h CSV 文件
+    csv_files = sorted(glob.glob('data/BTCUSDT-1h-*.csv'))
+    if not csv_files:
+        csv_files = sorted(glob.glob('../../data/BTCUSDT-1h-*.csv'))
+
+    if not csv_files:
+        raise FileNotFoundError("data/ 目录下未找到符合条件的 CSV 文件！")
+
+    print(f"Loading {len(csv_files)} monthly files: {[os.path.basename(f) for f in csv_files]}")
+
+    df_list = [pd.read_csv(f, header=None, names=columns) for f in csv_files]
+    df = pd.concat(df_list, ignore_index=True)
 
     for col in ['open', 'high', 'low', 'close', 'volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce')

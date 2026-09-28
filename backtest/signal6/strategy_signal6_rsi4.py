@@ -1,10 +1,23 @@
+#R
+
+import os
+import glob
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 
-# 1. Load Binance Vision OHLCV Data
-df = pd.read_csv('data/BTCUSDT-1h-2026-08.csv', header=None)
-df = df.iloc[:, :6]
+# 1. Load Binance Vision OHLCV Data (Automatically merge all monthly CSV files)
+csv_files = sorted(glob.glob('data/BTCUSDT-1h-*.csv'))
+if not csv_files:
+    csv_files = sorted(glob.glob('../../data/BTCUSDT-1h-*.csv'))
+
+if not csv_files:
+    raise FileNotFoundError("data/ 目录下未找到符合条件的 CSV 文件！")
+
+print(f"Loading {len(csv_files)} monthly files: {[os.path.basename(f) for f in csv_files]}")
+
+df_list = [pd.read_csv(f, header=None).iloc[:, :6] for f in csv_files]
+df = pd.concat(df_list, ignore_index=True)
+
 df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
 for col in ['open', 'high', 'low', 'close', 'volume']:
     df[col] = df[col].astype(float)

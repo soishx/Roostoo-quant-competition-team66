@@ -1,20 +1,29 @@
-# ma_window = 20, bias_buy = -0.01, exit_bias = -0.002
+#R
 
 import os
+import glob
 import pandas as pd
 import numpy as np
 
-def run_signal5_variant_c():
-    data_path = 'data/BTCUSDT-1h-2026-08.csv'
-    if not os.path.exists(data_path):
-        data_path = '../../data/BTCUSDT-1h-2026-08.csv'
-
+def run_signal5_variant_a():
     columns = [
         'open_time', 'open', 'high', 'low', 'close', 'volume',
         'close_time', 'quote_volume', 'trades', 'taker_base_vol',
         'taker_quote_vol', 'ignore'
     ]
-    df = pd.read_csv(data_path, header=None, names=columns)
+
+    # 自动扫描并拼接所有 SOLUSDT 1h CSV 文件
+    csv_files = sorted(glob.glob('data/SOLUSDT-1h-*.csv'))
+    if not csv_files:
+        csv_files = sorted(glob.glob('../../data/SOLUSDT-1h-*.csv'))
+
+    if not csv_files:
+        raise FileNotFoundError("data/ 目录下未找到符合条件的 CSV 文件！")
+
+    print(f"Loading {len(csv_files)} monthly files: {[os.path.basename(f) for f in csv_files]}")
+
+    df_list = [pd.read_csv(f, header=None, names=columns) for f in csv_files]
+    df = pd.concat(df_list, ignore_index=True)
 
     for col in ['open', 'high', 'low', 'close', 'volume']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
@@ -22,10 +31,10 @@ def run_signal5_variant_c():
     df['open_time'] = pd.to_datetime(df['open_time'], unit='us', errors='coerce')
     df = df.sort_values('open_time').reset_index(drop=True)
 
-    # Strategy parameters (Variant C: Quick Exit -0.2%)
-    ma_window = 20
+    # Strategy parameters (Variant A: Fast MA 10h)
+    ma_window = 10
     bias_buy = -0.01
-    exit_bias = -0.002
+    exit_bias = 0.0
     stop_loss_pct = 0.015
     fee_rate = 0.001
 
@@ -55,7 +64,7 @@ def run_signal5_variant_c():
                 current_equity *= (1 + ret) * (1 - fee_rate)
                 position = 0
                 trades_count += 1
-            # Check Exit Condition: Bias >= exit_bias (-0.2%)
+            # Check Exit Condition: Bias >= exit_bias
             elif prev_bias >= exit_bias:
                 ret = (current_open - prev_close_price) / prev_close_price
                 current_equity *= (1 + ret) * (1 - fee_rate)
@@ -85,7 +94,7 @@ def run_signal5_variant_c():
     sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(365) if daily_returns.std() > 0 else 0.0
 
     print("\n==================================================")
-    print("Signal 5 Variant C: Quick Exit (20h, Exit Bias -0.2%)")
+    print("Signal 5 Variant A: Fast MA (10h, Bias -1%)")
     print("==================================================")
     print(f"Cumulative Return: {total_return:.2f}%")
     print(f"Annualized Sharpe Ratio: {sharpe_ratio:.2f}")
@@ -93,4 +102,4 @@ def run_signal5_variant_c():
     print("==================================================\n")
 
 if __name__ == "__main__":
-    run_signal5_variant_c()
+    run_signal5_variant_a()
