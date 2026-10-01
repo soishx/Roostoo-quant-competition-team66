@@ -6,13 +6,12 @@ import os
 import requests
 import pandas as pd
 import numpy as np
-from urllib.parse import urlencode
 
 # ============================================================
 # API Credentials & Settings
 # ============================================================
 API_KEY = "srPm3Ubjj6ZLS7YyoLuGmwkyPGbB8NNrMziBuP2dwm1LmOX87JF4RyKO4wvjHv6Z"
-API_SECRET = "pMCXz3IGal6BqlVr7D7qtIWh4u5SKOxho6v8lu7yweLnS8RuDqllEdjmSo9gkfqo"
+SECRET_KEY = "pMCXz3IGal6BqlVr7D7qtIWh4u5SKOxho6v8lu7yweLnS8RuDqllEdjmSo9gkfqo"
 BASE_URL = "https://mock-api.roostoo.com"
 
 TRADING_PAIR = "SOL/USD"
@@ -20,106 +19,92 @@ BINANCE_CSV_PATTERN = "data/SOLUSDT-1h-*.csv"
 
 
 # ============================================================
-# Roostoo API Client
+# Roostoo API Standard Implementation (Directly from README Demo)
 # ============================================================
-class RoostooClient:
-    def __init__(self, api_key: str, api_secret: str, base_url: str):
-        self.api_key = api_key
-        self.api_secret = api_secret
-        self.base_url = base_url
+def _get_timestamp():
+    """Return a 13-digit millisecond timestamp as string."""
+    return str(int(time.time() * 1000))
 
-    def _get_signature(self, query_string: str) -> str:
-        """Generate HMAC SHA256 signature."""
-        return hmac.new(
-            self.api_secret.encode("utf-8"),
-            query_string.encode("utf-8"),
-            hashlib.sha256
-        ).hexdigest()
 
-    def _send_request(self, method: str, endpoint: str, params: dict = None) -> dict:
-        """Helper to sign and execute HTTP requests."""
-        if params is None:
-            params = {}
+def _get_signed_headers(payload: dict = {}):
+    """Generate signed headers and totalParams for RCL_TopLevelCheck endpoints."""
+    payload['timestamp'] = _get_timestamp()
+    sorted_keys = sorted(payload.keys())
+    total_params = "&".join(f"{k}={payload[k]}" for k in sorted_keys)
 
-        params["timestamp"] = str(int(time.time() * 1000))
-        query_string = urlencode(sorted(params.items()))
-        signature = self._get_signature(query_string)
+    signature = hmac.new(
+        SECRET_KEY.encode('utf-8'),
+        total_params.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
 
-        headers = {
-            "RST-API-KEY": self.api_key,
-            "MSG-SIGNATURE": signature,
-            "Content-Type": "application/x-www-form-urlencoded"
-        }
+    headers = {
+        'RST-API-KEY': API_KEY,
+        'MSG-SIGNATURE': signature
+    }
 
-        url = self.base_url + endpoint
+    return headers, payload, total_params
 
-        try:
-            if method.upper() == "GET":
-                response = requests.get(url, headers=headers, params=params)
-            else:
-                response = requests.post(url, headers=headers, data=params)
 
-            return response.json()
-        except Exception as e:
-            print(f"[API Error] Request failed: {e}")
-            return {"Success": False, "ErrMsg": str(e)}
+def get_ticker(pair=None):
+    """Get ticker for one or all pairs."""
+    url = f"{BASE_URL}/v3/ticker"
+    params = {'timestamp': _get_timestamp()}
+    if pair:
+        params['pair'] = pair
+    try:
+        res = requests.get(url, params=params)
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[API Error] get_ticker: {e}")
+        return None
 
-    def get_ticker(self, pair: str = None) -> dict:
-        """Fetch market ticker."""
-        params = {}
-        if pair:
-            params["pair"] = pair
-        return self._send_request("GET", "/v3/ticker", params)
 
-    def get_balance(self) -> dict:
-        """Fetch account balance information."""
-        return self._send_request("GET", "/v3/balance")
+def place_order(pair_or_coin, side, quantity, price=None, order_type=None):
+    """Place a LIMIT or MARKET order strictly following Roostoo spec."""
+    url = f"{BASE_URL}/v3/place_order"
+    pair = f"{pair_or_coin}/USD" if "/" not in pair_or_coin else pair_or_coin
 
-    def place_order(self, pair: str, side: str, quantity: float, order_type: str = "MARKET", price: float = None) -> dict:
-        """Place a spot buy or sell order."""
-        params = {
-            "pair": pair,
-            "side": side.upper(),
-            "type": order_type.upper(),
-            "quantity": str(quantity)
-        }
-        if order_type.upper() == "LIMIT" and price:
-            params["price"] = str(price)
+    if order_type is None:
+        order_type = "LIMIT" if price is not None else "MARKET"
 
-        return self._send_request("POST", "/v3/place_order", params)
+    payload = {
+        'pair': pair,
+        'side': side.upper(),
+        'type': order_type.upper(),
+        'quantity': str(quantity)
+    }
+    if order_type == 'LIMIT':
+        payload['price'] = str(price)
 
-    def open_short(self, pair: str, collateral: float, order_type: str = "MARKET", price: float = None) -> dict:
-        """Open short position (Uses /v6 endpoint)."""
-        params = {
-            "pair": pair,
-            "collateral": str(collateral)
-        }
-        if order_type.upper() == "LIMIT" and price:
-            params["order_type"] = "LIMIT"
-            params["price"] = str(price)
+    headers, _, total_params = _get_signed_headers(payload)
+    headers['Content-Type'] = 'application/x-www-form-urlencoded'
 
-        return self._send_request("POST", "/v6/short_open", params)
-
-    def close_short(self, pair: str, close_pct: str = "100") -> dict:
-        """Close short position (Uses /v6 endpoint)."""
-        params = {
-            "pair": pair,
-            "close_pct": close_pct
-        }
-        return self._send_request("POST", "/v6/short_close", params)
+    try:
+        res = requests.post(url, headers=headers, data=total_params)
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[API Error] place_order: {e}")
+        if e.response is not None:
+            print(f"[Response Text]: {e.response.text}")
+        return None
 
 
 # ============================================================
-# Strategy Execution Core
+# Strategy Initialization & Execution (Signal 6 RSI)
 # ============================================================
 def load_historical_df() -> pd.DataFrame:
-    """Load local CSV files to initialize technical indicators."""
+    """Load local CSV files to initialize RSI indicator."""
     csv_files = sorted(glob.glob(BINANCE_CSV_PATTERN))
+    if not csv_files:
+        csv_files = sorted(glob.glob("../" + BINANCE_CSV_PATTERN))
     if not csv_files:
         csv_files = sorted(glob.glob("../../" + BINANCE_CSV_PATTERN))
 
     if not csv_files:
-        print("[Warning] Local CSV files not found. Creating a blank container.")
+        print("[Warning] Local CSV files not found. Starting with empty container.")
         return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
     print(f"Loading {len(csv_files)} historical CSV files for RSI warming up...")
@@ -134,7 +119,7 @@ def load_historical_df() -> pd.DataFrame:
 
 
 def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.Series:
-    """Calculate RSI indicator."""
+    """Calculate 14-period RSI identical to strategy_signal6_rsi1.py."""
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
@@ -143,28 +128,30 @@ def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.Series:
 
 
 def run_live_bot():
-    client = RoostooClient(API_KEY, API_SECRET, BASE_URL)
     df = load_historical_df()
 
-    position = 0  # 0: Flat, 1: Long Position Held
+    # 0 -> Flat (No position)
+    # 1 -> Long Position (Spot position held)
+    position = 0
+
     print("\n==========================================")
     print("   Roostoo Live Strategy Bot Started      ")
-    print("   Strategy: Signal 6 RSI Reversal (30/70)")
+    print("   Strategy: Signal 6 RSI Reversal        ")
     print("==========================================\n")
 
     while True:
         try:
-            # 1. Fetch latest market price from Roostoo
-            ticker_resp = client.get_ticker(TRADING_PAIR)
-            if not ticker_resp.get("Success"):
-                print(f"[Market Data Error] {ticker_resp.get('ErrMsg')}")
+            # 1. Fetch latest market ticker
+            ticker_resp = get_ticker(TRADING_PAIR)
+            if not ticker_resp or not ticker_resp.get("Success"):
+                print("[Market Data Error] Fetch ticker failed, retrying in 10s...")
                 time.sleep(10)
                 continue
 
             last_price = float(ticker_resp["Data"][TRADING_PAIR]["LastPrice"])
             print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {TRADING_PAIR} Current Price: {last_price}")
 
-            # 2. Append latest price to DataFrame for real-time RSI update
+            # 2. Append latest price and recalculate RSI
             new_row = {
                 'timestamp': int(time.time() * 1000),
                 'open': last_price,
@@ -177,27 +164,26 @@ def run_live_bot():
             rsi_series = calculate_rsi(df_temp)
             current_rsi = rsi_series.iloc[-1]
 
-            print(f"Current Calculated RSI: {current_rsi:.2f}")
+            print(f"Current Calculated RSI: {current_rsi:.2f} | Current Position State: {position}")
 
-            # 3. Execution logic based on signals
+            # 3. Strictly follow Signal 6 strategy decision logic
+            # Open condition: position == 0 and RSI < 30 -> Buy Spot (BUY)
             if position == 0 and current_rsi < 30:
-                print(">> Signal Triggered: BUY (RSI < 30)")
-                # Example: Buy 1.0 SOL
-                order = client.place_order(TRADING_PAIR, "BUY", quantity=1.0)
-                print("Order Response:", order)
-                if order.get("Success"):
+                print(">> Signal Triggered: RSI < 30 -> Buying Spot (LONG)...")
+                order = place_order(TRADING_PAIR, "BUY", quantity=1.0)
+                print("Buy Order Response:", order)
+                if order and order.get("Success"):
                     position = 1
 
+            # Close condition: position == 1 and RSI > 70 -> Sell Spot (SELL)
             elif position == 1 and current_rsi > 70:
-                print(">> Signal Triggered: SELL (RSI > 70)")
-                # Example: Sell 1.0 SOL
-                order = client.place_order(TRADING_PAIR, "SELL", quantity=1.0)
-                print("Order Response:", order)
-                if order.get("Success"):
+                print(">> Signal Triggered: RSI > 70 -> Selling Spot (CLOSE LONG)...")
+                order = place_order(TRADING_PAIR, "SELL", quantity=1.0)
+                print("Sell Order Response:", order)
+                if order and order.get("Success"):
                     position = 0
 
-            # Sleep before next poll (e.g., 60 seconds)
-            time.sleep(60)
+            time.sleep(10)
 
         except KeyboardInterrupt:
             print("\nBot execution stopped by user.")
