@@ -14,12 +14,16 @@ API_KEY = "srPm3Ubjj6ZLS7YyoLuGmwkyPGbB8NNrMziBuP2dwm1LmOX87JF4RyKO4wvjHv6Z"
 SECRET_KEY = "pMCXz3IGal6BqlVr7D7qtIWh4u5SKOxho6v8lu7yweLnS8RuDqllEdjmSo9gkfqo"
 BASE_URL = "https://mock-api.roostoo.com"
 
-TRADING_PAIR = "SOL/USD"
-BINANCE_CSV_PATTERN = "data/SOLUSDT-1h-*.csv"
+# Selected 4 mainstream trading pairs
+TRADING_PAIRS = ["BTC/USD", "ETH/USD", "SOL/USD", "XRP/USD"]
+
+# Risk Control Parameters
+MAX_SINGLE_POSITION_PCT = 0.20  # Max 20% of available cash per position
+MAX_CONCURRENT_POSITIONS = 3    # Max 3 concurrent positions
 
 
 # ============================================================
-# Roostoo API Standard Implementation (Directly from README Demo)
+# Roostoo API Standard Implementation
 # ============================================================
 def _get_timestamp():
     """Return a 13-digit millisecond timestamp as string."""
@@ -47,7 +51,7 @@ def _get_signed_headers(payload: dict = {}):
 
 
 def get_ticker(pair=None):
-    """Get ticker for one or all pairs."""
+    """Get ticker for one or all pairs (RCL_TSCheck)."""
     url = f"{BASE_URL}/v3/ticker"
     params = {'timestamp': _get_timestamp()}
     if pair:
@@ -58,6 +62,19 @@ def get_ticker(pair=None):
         return res.json()
     except requests.exceptions.RequestException as e:
         print(f"[API Error] get_ticker: {e}")
+        return None
+
+
+def get_account_balance():
+    """Fetch account balance to check available cash (USD/USDT)."""
+    url = f"{BASE_URL}/v3/balance"
+    headers, _, _ = _get_signed_headers({})
+    try:
+        res = requests.get(url, headers=headers, params={'timestamp': _get_timestamp()})
+        res.raise_for_status()
+        return res.json()
+    except requests.exceptions.RequestException as e:
+        print(f"[API Error] get_account_balance: {e}")
         return None
 
 
@@ -73,7 +90,7 @@ def place_order(pair_or_coin, side, quantity, price=None, order_type=None):
         'pair': pair,
         'side': side.upper(),
         'type': order_type.upper(),
-        'quantity': str(quantity)
+        'quantity': str(round(quantity, 4))
     }
     if order_type == 'LIMIT':
         payload['price'] = str(price)
@@ -86,28 +103,29 @@ def place_order(pair_or_coin, side, quantity, price=None, order_type=None):
         res.raise_for_status()
         return res.json()
     except requests.exceptions.RequestException as e:
-        print(f"[API Error] place_order: {e}")
+        print(f"[API Error] place_order for {pair}: {e}")
         if e.response is not None:
             print(f"[Response Text]: {e.response.text}")
         return None
 
 
 # ============================================================
-# Strategy Initialization & Execution (Signal 6 RSI)
+# Strategy Initialization & Execution (Multi-Pair + Risk Control)
 # ============================================================
-def load_historical_df() -> pd.DataFrame:
-    """Load local CSV files to initialize RSI indicator."""
-    csv_files = sorted(glob.glob(BINANCE_CSV_PATTERN))
+def load_historical_df(coin_symbol: str) -> pd.DataFrame:
+    """Load local CSV files for a specific coin to initialize RSI indicator."""
+    pattern = f"data/{coin_symbol}USDT-1h-*.csv"
+    csv_files = sorted(glob.glob(pattern))
     if not csv_files:
-        csv_files = sorted(glob.glob("../" + BINANCE_CSV_PATTERN))
+        csv_files = sorted(glob.glob("../" + pattern))
     if not csv_files:
-        csv_files = sorted(glob.glob("../../" + BINANCE_CSV_PATTERN))
+        csv_files = sorted(glob.glob("../../" + pattern))
 
     if not csv_files:
-        print("[Warning] Local CSV files not found. Starting with empty container.")
+        print(f"[Warning] Local CSV files for {coin_symbol} not found. Starting with empty container.")
         return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
 
-    print(f"Loading {len(csv_files)} historical CSV files for RSI warming up...")
+    print(f"Loading {len(csv_files)} historical files for {coin_symbol}...")
     df_list = [pd.read_csv(f, header=None).iloc[:, :6] for f in csv_files]
     df = pd.concat(df_list, ignore_index=True)
     df.columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
@@ -119,7 +137,7 @@ def load_historical_df() -> pd.DataFrame:
 
 
 def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.Series:
-    """Calculate 14-period RSI identical to strategy_signal6_rsi1.py."""
+    """Calculate 14-period RSI."""
     delta = df['close'].diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=window).mean()
     loss = (-delta.where(delta < 0, 0)).rolling(window=window).mean()
@@ -127,61 +145,83 @@ def calculate_rsi(df: pd.DataFrame, window: int = 14) -> pd.Series:
     return 100 - (100 / (1 + rs))
 
 
-def run_live_bot():
-    df = load_historical_df()
+def run_live_strategy():
+    coin_data = {}
+    positions = {} # 0: No position, 1: Holding position
 
-    # 0 -> Flat (No position)
-    # 1 -> Long Position (Spot position held)
-    position = 0
+    for pair in TRADING_PAIRS:
+        coin_name = pair.split("/")[0]
+        coin_data[pair] = load_historical_df(coin_name)
+        positions[pair] = 0
 
-    print("\n==========================================")
-    print("   Roostoo Live Strategy Bot Started      ")
-    print("   Strategy: Signal 6 RSI Reversal        ")
-    print("==========================================\n")
+    print("\n==================================================")
+    print("   Roostoo Multi-Currency Strategy Bot (Signal 6) ")
+    print(f"   Monitored Pairs: {TRADING_PAIRS}                ")
+    print(f"   Risk Control: Max 20% Capital / Max 3 Positions")
+    print("==================================================\n")
 
     while True:
         try:
-            # 1. Fetch latest market ticker
-            ticker_resp = get_ticker(TRADING_PAIR)
-            if not ticker_resp or not ticker_resp.get("Success"):
-                print("[Market Data Error] Fetch ticker failed, retrying in 10s...")
-                time.sleep(10)
-                continue
+            active_positions_count = sum(positions.values())
 
-            last_price = float(ticker_resp["Data"][TRADING_PAIR]["LastPrice"])
-            print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {TRADING_PAIR} Current Price: {last_price}")
+            for pair in TRADING_PAIRS:
+                coin_symbol = pair.split("/")[0]
+                
+                # 1. Fetch latest market ticker
+                ticker_resp = get_ticker(pair)
+                if not ticker_resp or not ticker_resp.get("Success"):
+                    print(f"[Market Data Error] Fetch ticker failed for {pair}, skipping...")
+                    continue
 
-            # 2. Append latest price and recalculate RSI
-            new_row = {
-                'timestamp': int(time.time() * 1000),
-                'open': last_price,
-                'high': last_price,
-                'low': last_price,
-                'close': last_price,
-                'volume': 0.0
-            }
-            df_temp = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-            rsi_series = calculate_rsi(df_temp)
-            current_rsi = rsi_series.iloc[-1]
+                last_price = float(ticker_resp["Data"][pair]["LastPrice"])
+                print(f"[{time.strftime('%Y-%m-%d %H:%M:%S')}] {pair} Price: {last_price}")
 
-            print(f"Current Calculated RSI: {current_rsi:.2f} | Current Position State: {position}")
+                # 2. Calculate real-time RSI
+                new_row = {
+                    'timestamp': int(time.time() * 1000),
+                    'open': last_price, 'high': last_price,
+                    'low': last_price, 'close': last_price, 'volume': 0.0
+                }
+                df_temp = pd.concat([coin_data[pair], pd.DataFrame([new_row])], ignore_index=True)
+                current_rsi = calculate_rsi(df_temp).iloc[-1]
 
-            # 3. Strictly follow Signal 6 strategy decision logic
-            # Open condition: position == 0 and RSI < 30 -> Buy Spot (BUY)
-            if position == 0 and current_rsi < 30:
-                print(">> Signal Triggered: RSI < 30 -> Buying Spot (LONG)...")
-                order = place_order(TRADING_PAIR, "BUY", quantity=1.0)
-                print("Buy Order Response:", order)
-                if order and order.get("Success"):
-                    position = 1
+                print(f"   -> RSI: {current_rsi:.2f} | Position: {positions[pair]} | Active Count: {active_positions_count}")
 
-            # Close condition: position == 1 and RSI > 70 -> Sell Spot (SELL)
-            elif position == 1 and current_rsi > 70:
-                print(">> Signal Triggered: RSI > 70 -> Selling Spot (CLOSE LONG)...")
-                order = place_order(TRADING_PAIR, "SELL", quantity=1.0)
-                print("Sell Order Response:", order)
-                if order and order.get("Success"):
-                    position = 0
+                # 3. Strategy logic & Risk control evaluation
+                # Open condition: No position & RSI < 30 & Under max concurrent limit (3)
+                if positions[pair] == 0 and current_rsi < 30:
+                    if active_positions_count >= MAX_CONCURRENT_POSITIONS:
+                        print(f">> [{pair}] Signal Triggered (RSI < 30), but Max Concurrent Positions ({MAX_CONCURRENT_POSITIONS}) reached. Skipping.")
+                        continue
+
+                    print(f">> [{pair}] Signal Triggered: RSI < 30 -> Calculating 20% position size...")
+                    
+                    balance_resp = get_account_balance()
+                    available_cash = 10000.0  # Fallback initial capital
+                    if balance_resp and balance_resp.get("Success"):
+                        wallet = balance_resp.get("Data", {})
+                        available_cash = float(wallet.get("USD", wallet.get("USDT", 10000.0)))
+
+                    target_allocation = available_cash * MAX_SINGLE_POSITION_PCT
+                    quantity = target_allocation / last_price
+
+                    print(f"   Available Cash: {available_cash:.2f} | 20% Allocation: {target_allocation:.2f} | Order Qty: {quantity:.4f}")
+                    
+                    order = place_order(coin_symbol, "BUY", quantity=quantity)
+                    print(f"[{pair}] Buy Response:", order)
+                    if order and order.get("Success"):
+                        positions[pair] = 1
+                        active_positions_count += 1
+
+                # Close condition: Holding position & RSI > 70 -> Close position
+                elif positions[pair] == 1 and current_rsi > 70:
+                    print(f">> [{pair}] Signal Triggered: RSI > 70 -> Selling Spot (Close Position)...")
+                    
+                    order = place_order(coin_symbol, "SELL", quantity=1.0) 
+                    print(f"[{pair}] Sell Response:", order)
+                    if order and order.get("Success"):
+                        positions[pair] = 0
+                        active_positions_count = max(0, active_positions_count - 1)
 
             time.sleep(10)
 
@@ -194,4 +234,4 @@ def run_live_bot():
 
 
 if __name__ == "__main__":
-    run_live_bot()
+    run_live_strategy()
