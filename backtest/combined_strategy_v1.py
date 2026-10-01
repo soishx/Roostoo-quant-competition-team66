@@ -29,12 +29,12 @@ import pandas as pd
 
 
 def get_merged_csv_path(symbol_prefix: str) -> str:
-    """Scan and merge Binance headerless raw CSVs for Person B data."""
-    # Support running from both project root or backtest_personB directory
+    """Scan and merge Binance headerless raw CSVs for data."""
+    # Support running from both project root or backtest directory
     possible_folders = [
-        Path("data_personB"),
-        Path("backtest_personB/data_personB"),
-        Path(__file__).parent / "data_personB" if "__file__" in globals() else Path("data_personB")
+        Path("data"),
+        Path("backtest/data"),
+        Path(__file__).parent / "data" if "__file__" in globals() else Path("data")
     ]
     
     target_folder = None
@@ -44,7 +44,7 @@ def get_merged_csv_path(symbol_prefix: str) -> str:
             break
             
     if target_folder is None:
-        raise FileNotFoundError(f"Could not find any CSV files for {symbol_prefix} in data_personB folder.")
+        raise FileNotFoundError(f"Could not find any CSV files for {symbol_prefix} in data folder.")
 
     files = sorted(glob.glob(str(target_folder / f"{symbol_prefix}*.csv")))
     dfs = []
@@ -77,7 +77,7 @@ def get_merged_csv_path(symbol_prefix: str) -> str:
 
 
 # -----------------------------
-# EDIT THESE FILE PATHS (Auto-merged from data_personB)
+# EDIT THESE FILE PATHS (Auto-merged from data)
 # -----------------------------
 FILES: Dict[str, str] = {
     "BTC": get_merged_csv_path("BTCUSDT"),
