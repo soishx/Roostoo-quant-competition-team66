@@ -8,3 +8,4 @@ __pycache__/
 logs/
 
 backtest.py
+backtest_out/
