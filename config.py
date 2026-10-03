@@ -34,7 +34,7 @@ TAKER_FEE = 0.001
 SLIPPAGE  = 0.0005
 
 # ---------------- Loop ----------------
-LOOP_INTERVAL_SEC = 65              # API: 1 trade/min max, leave headroom
+LOOP_INTERVAL_SEC = 300              # API: 1 trade/min max, leave headroom
 KLINE_INTERVAL    = "1h"
 KLINE_LIMIT       = 200             # enough for 48h MA + 24h ATR + buffer
 
