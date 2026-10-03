@@ -7,5 +7,7 @@ __pycache__/
 # Runtime artifacts
 logs/
 
+#backtest
 backtest.py
 backtest_out/
+data/
