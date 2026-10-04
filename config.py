@@ -15,10 +15,12 @@ BINANCE_BASE_URL = "https://api.binance.com"
 BINANCE_SYMBOL_MAP = {
     "BTC/USD": "BTCUSDT",   
     "ETH/USD": "ETHUSDT",
+    "SOL/USD": "SOLUSDT",
+    "BNB/USD": "BNBUSDT"
 }
 
 # ---------------- Trading ----------------
-PAIRS        = ["ETH/USD", "BTC/USD"]
+PAIRS        = ["ETH/USD", "BTC/USD"， "SOL/USD", "BNB/USD"]
 INITIAL_CASH = 100_000.0
 
 # ---------------- Strategy ----------------
@@ -27,7 +29,7 @@ LONG_MA_HOURS       = 48
 ATR_PERIOD          = 24
 RISK_PER_TRADE      = 0.005
 ATR_STOP_MULTIPLIER = 3.0
-MAX_POSITION_PCT    = 0.20
+MAX_POSITION_PCT    = 0.02
 
 # ---------------- Fees / Slippage ----------------
 TAKER_FEE = 0.001
@@ -57,7 +59,7 @@ SHORT_ENABLED = True
 SHORT_RISK_SCALE = 0.5
 
 # Hard cap: short notional <= equity * SHORT_MAX_POSITION_PCT (25%)
-SHORT_MAX_POSITION_PCT = 0.25
+SHORT_MAX_POSITION_PCT = 0.015
 
 # Stop: tighter than long (long uses 1.5)
 SHORT_ATR_MULTIPLIER = 2.5
