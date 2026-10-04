@@ -67,7 +67,7 @@ SHORT_TP1_ATR      = 2.0
 SHORT_TP1_FRACTION = 0.50   # close 40% of original short qty
 
 SHORT_TP2_ATR      = 4.0
-SHORT_TP2_FRACTION = 0.40   # close another 30% of original short qty
+SHORT_TP2_FRACTION = 0.50   # close another 30% of original short qty
 
 # Remaining 30% exits via trailing stop
 
@@ -104,4 +104,4 @@ LONG_TP1_ATR      = 2.0
 LONG_TP1_FRACTION = 0.50
 
 LONG_TP2_ATR      = 4.0
-LONG_TP2_FRACTION = 0.40
+LONG_TP2_FRACTION = 0.50
