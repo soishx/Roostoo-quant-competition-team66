@@ -6,8 +6,8 @@ load_dotenv()
 
 # ---------------- Roostoo (execution) ----------------
 BASE_URL   = "https://mock-api.roostoo.com"
-API_KEY    = os.getenv("ROOSTOO_API_KEY", "srPm3Ubjj6ZLS7YyoLuGmwkyPGbB8NNrMziBuP2dwm1LmOX87JF4RyKO4wvjHv6Z")
-SECRET_KEY = os.getenv("ROOSTOO_SECRET_KEY", "pMCXz3lGaI6BqIVr7D7qtIWh4u5SKOxho6v8Iu7yweLnS8RuDqllEdjmSo9gkfqo")
+API_KEY    = os.getenv("ROOSTOO_API_KEY", "")
+SECRET_KEY = os.getenv("ROOSTOO_SECRET_KEY", "")
 
 # ---------------- Binance (market data) ----------------
 BINANCE_BASE_URL = "https://api.binance.com"
