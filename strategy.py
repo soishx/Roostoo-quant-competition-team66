@@ -48,10 +48,18 @@ class MAStrategy:
     def __init__(self,
                  short_hours: int,
                  long_hours: int,
-                 atr_period: int):
+                 atr_period: int,
+                 tp1_atr: float,
+                 tp1_fraction: float,
+                 tp2_atr: float,
+                 tp2_fraction: float):
         self.short_hours = short_hours
         self.long_hours = long_hours
         self.atr_period = atr_period
+        self.tp1_atr = tp1_atr
+        self.tp1_fraction = tp1_fraction
+        self.tp2_atr = tp2_atr
+        self.tp2_fraction = tp2_fraction
 
     def compute_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """Returns df with columns short_ma, long_ma, atr appended."""
@@ -129,7 +137,53 @@ class MAStrategy:
 
         stop_price = price - stop_distance
         return units, stop_price
-    
+
+    def check_long_exits(self,
+                         price: float,
+                         atr_now: float,
+                         state,   # PairState
+                         ) -> dict:
+        """
+        Called every loop while a long is open (when LONG_TP_ENABLED).
+        Decides which take-profit tier to trigger, using ATR frozen at entry.
+
+            - tp1           (frozen at entry ATR)
+            - tp2           (frozen at entry ATR)
+            - none
+
+        Stop-loss and death-cross exits are handled elsewhere.
+        """
+        if state.position <= 0:
+            return {"action": "none"}
+
+        # ATR used for take-profit targets: frozen at entry.
+        atr_entry = state.long_atr_at_entry
+        atr_for_tp = atr_entry if (atr_entry is not None and atr_entry > 0) else atr_now
+
+        # 1) Take-profit tier 1 (frozen target)
+        if (not state.long_tp1_done
+                and state.entry_price is not None
+                and atr_for_tp is not None and atr_for_tp > 0):
+            tp1 = state.entry_price + atr_for_tp * self.tp1_atr
+            if price >= tp1:
+                return {"action": "tp1",
+                        "price": price,
+                        "target": tp1,
+                        "close_fraction": self.tp1_fraction}
+
+        # 2) Take-profit tier 2 (frozen target, only after TP1 done)
+        if (state.long_tp1_done and not state.long_tp2_done
+                and state.entry_price is not None
+                and atr_for_tp is not None and atr_for_tp > 0):
+            tp2 = state.entry_price + atr_for_tp * self.tp2_atr
+            if price >= tp2:
+                return {"action": "tp2",
+                        "price": price,
+                        "target": tp2,
+                        "close_fraction": self.tp2_fraction}
+
+        return {"action": "none"}
+
 
 # =========================================================
 # Short-side logic

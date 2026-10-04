@@ -7,7 +7,10 @@ from config import (
     PAIRS, SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD,
     RISK_PER_TRADE, ATR_STOP_MULTIPLIER, MAX_POSITION_PCT,
     TAKER_FEE, LOOP_INTERVAL_SEC, KLINE_INTERVAL, KLINE_LIMIT,
-    DRY_RUN, BINANCE_SYMBOL_MAP, USE_ATR_STOP_LONG, USE_ATR_STOP_SHORT, 
+    DRY_RUN, BINANCE_SYMBOL_MAP, USE_ATR_STOP_LONG, USE_ATR_STOP_SHORT,
+    # long take-profit
+    LONG_TP_ENABLED, LONG_TP1_ATR, LONG_TP1_FRACTION,
+    LONG_TP2_ATR, LONG_TP2_FRACTION,
     # short
     SHORT_ENABLED, SHORT_RISK_SCALE, SHORT_MAX_POSITION_PCT,
     SHORT_ATR_MULTIPLIER, SHORT_TP1_ATR, SHORT_TP1_FRACTION,
@@ -40,7 +43,10 @@ def main():
             raise RuntimeError(f"{p} has no Binance mapping")
 
     long_strats = {
-        p: MAStrategy(SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD) for p in PAIRS
+        p: MAStrategy(SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD,
+                      LONG_TP1_ATR, LONG_TP1_FRACTION,
+                      LONG_TP2_ATR, LONG_TP2_FRACTION)
+        for p in PAIRS
     }
     short_strats = {
         p: MAShortStrategy(
@@ -138,7 +144,48 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
     long_action = "hold"
     long_order_id = None
 
-    if long_signal in ("exit", "stop") and state.in_position:
+    # Long take-profit (TP1/TP2), checked before the signal exit (tp-first).
+    if LONG_TP_ENABLED and state.in_position:
+        ex = long_strategy.check_long_exits(
+            price=last_price, atr_now=cur_atr or 0.0, state=state
+        )
+        act = ex["action"]
+        if act in ("tp1", "tp2"):
+            # close_fraction is a fraction of the ORIGINAL long qty
+            qty = round_to_precision(
+                state.long_original_qty * ex["close_fraction"],
+                pair_info["AmountPrecision"],
+            )
+            qty = min(qty, state.position)
+            if qty > 0:
+                resp = _place_market(roostoo, pair, "SELL", qty, last_price,
+                                     logger, DRY_RUN)
+                if resp and resp.get("Success"):
+                    detail = resp["OrderDetail"]
+                    fill = float(detail["FilledAverPrice"])
+                    filled = float(detail["FilledQuantity"])
+                    fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
+                    eq_before = equity
+                    state.cash += filled * fill - fee_paid
+                    state.position -= filled
+                    if act == "tp1":
+                        state.long_tp1_done = True
+                    else:
+                        state.long_tp2_done = True
+                    eq_after = state.cash + state.position * fill
+                    long_action = "long_tp1" if act == "tp1" else "long_tp2"
+                    long_order_id = detail["OrderID"]
+                    logger.log_trade(
+                        symbol=pair, side="sell", price=fill, quantity=filled,
+                        fee=fee_paid, order_id=long_order_id,
+                        signal_reason=act,
+                        equity_before=eq_before, equity_after=eq_after,
+                        position_after=state.position,
+                    )
+                    state.save()
+                    equity = compute_equity(state, last_price)
+
+    if long_signal in ("exit", "stop") and state.in_position and long_action == "hold":
         qty = round_to_precision(state.position, pair_info["AmountPrecision"])
         if qty > 0:
             resp = _place_market(roostoo, pair, "SELL", qty, last_price,
@@ -154,6 +201,10 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                 state.entry_price = None
                 state.stop_price = None
                 state.stop_armed = False
+                state.long_atr_at_entry = None
+                state.long_original_qty = 0.0
+                state.long_tp1_done = False
+                state.long_tp2_done = False
                 eq_after = state.cash
                 long_action = "place_order"
                 long_order_id = detail["OrderID"]
@@ -194,6 +245,10 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                 state.stop_price = stop_price if USE_ATR_STOP_LONG else None
                 state.stop_armed = USE_ATR_STOP_LONG
                 state.stop_armed = True
+                state.long_atr_at_entry = cur_atr
+                state.long_original_qty = filled
+                state.long_tp1_done = False
+                state.long_tp2_done = False
                 eq_after = state.cash + filled * fill
                 long_action = "place_order"
                 long_order_id = detail["OrderID"]
@@ -370,6 +425,8 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
             "short_stop_price": state.short_stop_price,
             "short_atr_at_entry": state.short_atr_at_entry,
             "short_entry_price": state.short_entry_price,
+            "long_atr_at_entry": state.long_atr_at_entry,
+            "long_original_qty": state.long_original_qty,
         },
     )
 

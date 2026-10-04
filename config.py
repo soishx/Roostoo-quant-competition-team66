@@ -13,7 +13,7 @@ SECRET_KEY = os.getenv("ROOSTOO_SECRET_KEY", "pMCXz3lGaI6BqIVr7D7qtIWh4u5SKOxho6
 BINANCE_BASE_URL = "https://api.binance.com"
 # Binance symbol mapping: Roostoo pair -> Binance symbol
 BINANCE_SYMBOL_MAP = {
-    "BTC/USD": "BTCUSDT",   # Binance has no BTCUSD spot; USDT is the proxy
+    "BTC/USD": "BTCUSDT",   
     "ETH/USD": "ETHUSDT",
 }
 
@@ -57,17 +57,17 @@ SHORT_ENABLED = True
 SHORT_RISK_SCALE = 0.5
 
 # Hard cap: short notional <= equity * SHORT_MAX_POSITION_PCT (25%)
-SHORT_MAX_POSITION_PCT = 0.25
+SHORT_MAX_POSITION_PCT = 0.50
 
 # Stop: tighter than long (long uses 1.5)
 SHORT_ATR_MULTIPLIER = 2.5
 
 # Tiered take-profit (in ATR multiples of profit)
-SHORT_TP1_ATR      = 3.0
-SHORT_TP1_FRACTION = 0.40   # close 40% of original short qty
+SHORT_TP1_ATR      = 2.0
+SHORT_TP1_FRACTION = 0.50   # close 40% of original short qty
 
-SHORT_TP2_ATR      = 6.0
-SHORT_TP2_FRACTION = 0.30   # close another 30% of original short qty
+SHORT_TP2_ATR      = 4.0
+SHORT_TP2_FRACTION = 0.40   # close another 30% of original short qty
 
 # Remaining 30% exits via trailing stop
 
@@ -84,9 +84,24 @@ SHORT_POSITIONS_PATH = "/v6/short_positions"
 # =========================================================
 
 # If True, ATR stop-loss is active for the long side.
-USE_ATR_STOP_LONG = True
+USE_ATR_STOP_LONG = False
 
 # If True, ATR stop-loss is active for the short side.
 # Take-profits (TP1/TP2) are independent of this and always apply
 # when a short is open.
 USE_ATR_STOP_SHORT = True
+
+# =========================================================
+# Long take-profit
+# =========================================================
+
+LONG_TP_ENABLED = True
+
+# Same structure as short side: TP1 at 3.0 ATR closes 40%,
+# TP2 at 6.0 ATR closes 30% of original qty.
+# Remaining 30% exits via death-cross signal.
+LONG_TP1_ATR      = 2.0
+LONG_TP1_FRACTION = 0.50
+
+LONG_TP2_ATR      = 4.0
+LONG_TP2_FRACTION = 0.40

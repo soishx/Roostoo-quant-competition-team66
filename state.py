@@ -18,6 +18,10 @@ class PairState:
     entry_price: Optional[float] = None
     stop_price: Optional[float] = None
     stop_armed: bool = False
+    long_atr_at_entry: Optional[float] = None      
+    long_original_qty: float = 0.0                 
+    long_tp1_done: bool = False                
+    long_tp2_done: bool = False            
 
     # ---- short side ----
     short_position: float = 0.0            # qty currently shorted (positive number)
