@@ -20,7 +20,7 @@ BINANCE_SYMBOL_MAP = {
 }
 
 # ---------------- Trading ----------------
-PAIRS        = ["ETH/USD", "BTC/USD"， "SOL/USD", "BNB/USD"]
+PAIRS        = ["ETH/USD", "BTC/USD", "SOL/USD", "BNB/USD"]
 INITIAL_CASH = 100_000.0
 
 # ---------------- Strategy ----------------
