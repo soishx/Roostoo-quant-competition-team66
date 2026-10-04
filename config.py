@@ -27,7 +27,7 @@ LONG_MA_HOURS       = 48
 ATR_PERIOD          = 24
 RISK_PER_TRADE      = 0.005
 ATR_STOP_MULTIPLIER = 3.0
-MAX_POSITION_PCT    = 0.50
+MAX_POSITION_PCT    = 0.20
 
 # ---------------- Fees / Slippage ----------------
 TAKER_FEE = 0.001
@@ -57,7 +57,7 @@ SHORT_ENABLED = True
 SHORT_RISK_SCALE = 0.5
 
 # Hard cap: short notional <= equity * SHORT_MAX_POSITION_PCT (25%)
-SHORT_MAX_POSITION_PCT = 0.50
+SHORT_MAX_POSITION_PCT = 0.25
 
 # Stop: tighter than long (long uses 1.5)
 SHORT_ATR_MULTIPLIER = 2.5
