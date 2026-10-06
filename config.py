@@ -16,7 +16,16 @@ BINANCE_SYMBOL_MAP = {
     "BTC/USD": "BTCUSDT",   
     "ETH/USD": "ETHUSDT",
     "SOL/USD": "SOLUSDT",
-    "BNB/USD": "BNBUSDT"
+    "BNB/USD": "BNBUSDT",
+    "BONK/USD": "BONKUSDT",
+    "AMDB/USD": "AMDBUSDT",
+    "CRCLB/USD": "CRCLBUSDT",
+    "GOOGLB/USD":"GOOGLBUSDT",
+    "INTCB/USD": "INTCBUSDT",
+    "METAB/USD": "METABUSDT",
+    "NVDAB/USD": "NVDABUSDT",
+    "SKHYB/USD": "SKHYBUSDT",
+    "SNDKB/USD": "SNDKBUSDT",
 }
 
 # ---------------- Trading ----------------
@@ -30,6 +39,11 @@ ATR_PERIOD          = 24
 RISK_PER_TRADE      = 0.005
 ATR_STOP_MULTIPLIER = 3.0
 MAX_POSITION_PCT    = 0.02
+
+# ---------------- Portfolio-level risk ----------------
+MAX_TOTAL_EXPOSURE  = 0.60   # total gross exposure cap (fraction of portfolio equity)
+DRAWDOWN_TRIGGER    = 0.10   # circuit breaker triggers at this drawdown from peak
+DRAWDOWN_RECOVER    = 0.05   # circuit breaker recovers below this drawdown
 
 # ---------------- Fees / Slippage ----------------
 TAKER_FEE = 0.001
@@ -66,10 +80,10 @@ SHORT_ATR_MULTIPLIER = 2.5
 
 # Tiered take-profit (in ATR multiples of profit)
 SHORT_TP1_ATR      = 2.0
-SHORT_TP1_FRACTION = 0.50   # close 40% of original short qty
+SHORT_TP1_FRACTION = 0.40   # close 40% of original short qty
 
 SHORT_TP2_ATR      = 4.0
-SHORT_TP2_FRACTION = 0.50   # close another 30% of original short qty
+SHORT_TP2_FRACTION = 0.30   # close another 30% of original short qty
 
 # Remaining 30% exits via trailing stop
 
@@ -103,7 +117,7 @@ LONG_TP_ENABLED = True
 # TP2 at 6.0 ATR closes 30% of original qty.
 # Remaining 30% exits via death-cross signal.
 LONG_TP1_ATR      = 2.0
-LONG_TP1_FRACTION = 0.50
+LONG_TP1_FRACTION = 0.40
 
 LONG_TP2_ATR      = 4.0
-LONG_TP2_FRACTION = 0.50
+LONG_TP2_FRACTION = 0.30

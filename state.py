@@ -4,24 +4,27 @@ import os
 from dataclasses import dataclass, asdict
 from typing import Optional
 
-from config import STATE_DIR
+from config import STATE_DIR, INITIAL_CASH
 
 
 @dataclass
 class PairState:
-    """Per-pair runtime state. Persisted to disk every loop."""
+    """Per-pair runtime state. Persisted to disk every loop.
+
+    Cash no longer lives here — it belongs to PortfolioState.
+    Positions are reconciled from the exchange wallet each loop.
+    """
     pair: str
 
     # ---- long side ----
-    cash: float = 100_000.0
     position: float = 0.0
     entry_price: Optional[float] = None
     stop_price: Optional[float] = None
     stop_armed: bool = False
-    long_atr_at_entry: Optional[float] = None      
-    long_original_qty: float = 0.0                 
-    long_tp1_done: bool = False                
-    long_tp2_done: bool = False            
+    long_atr_at_entry: Optional[float] = None
+    long_original_qty: float = 0.0
+    long_tp1_done: bool = False
+    long_tp2_done: bool = False
 
     # ---- short side ----
     short_position: float = 0.0            # qty currently shorted (positive number)
@@ -59,6 +62,29 @@ class PairState:
             return cls(pair=pair)
         with open(path) as f:
             data = json.load(f)
-        # Backward-compatible: ignore unknown fields
+        # Backward-compatible: ignore unknown fields (e.g. legacy `cash`)
+        known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        return cls(**known)
+
+
+@dataclass
+class PortfolioState:
+    """Single shared account across all pairs."""
+    cash: float = INITIAL_CASH
+    peak_equity: float = INITIAL_CASH
+    breaker_active: bool = False
+
+    def save(self):
+        path = os.path.join(STATE_DIR, "state_PORTFOLIO.json")
+        with open(path, "w") as f:
+            json.dump(asdict(self), f, indent=2)
+
+    @classmethod
+    def load(cls) -> "PortfolioState":
+        path = os.path.join(STATE_DIR, "state_PORTFOLIO.json")
+        if not os.path.exists(path):
+            return cls()
+        with open(path) as f:
+            data = json.load(f)
         known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
         return cls(**known)

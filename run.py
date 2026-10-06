@@ -19,7 +19,8 @@ from config import (
 from exchange_client import RoostooClient
 from market_data import BinanceDataClient
 from strategy import MAStrategy, MAShortStrategy
-from state import PairState
+from state import PairState, PortfolioState
+from portfolio import PortfolioManager
 from trade_logger import TradeLogger
 
 
@@ -65,10 +66,35 @@ def main():
         for p in PAIRS
     }
     states = {p: PairState.load(p) for p in PAIRS}
+    portfolio = PortfolioState.load()
+    portfolio_mgr = PortfolioManager(portfolio)
     logger = TradeLogger(log_dir="logs")
 
     while True:
         loop_start = time.time()
+
+        # ---- Portfolio-level: reconcile cash+positions, equity, breaker ----
+        try:
+            wallet = roostoo.get_balance()
+            short_positions = roostoo.get_short_positions()
+            ticker_resp = roostoo.get_ticker()
+            if not ticker_resp or not ticker_resp.get("Success"):
+                raise RuntimeError(f"ticker fetch failed: {ticker_resp}")
+            prices = {p: float(ticker_resp["Data"][p]["LastPrice"]) for p in PAIRS}
+
+            portfolio_mgr.reconcile(wallet, short_positions, states)
+            equity = portfolio_mgr.compute_equity(states, prices)
+            drawdown = portfolio_mgr.update_breaker(equity)
+            if portfolio.breaker_active:
+                print(f"[portfolio] breaker ACTIVE  equity={equity:.2f} dd={drawdown:.4f}")
+        except Exception as e:
+            logger.log_error("portfolio reconcile failed",
+                             context={"err": str(e), "trace": traceback.format_exc()})
+            print(f"[portfolio] reconcile failed: {e}")
+            portfolio.save()
+            time.sleep(max(0, LOOP_INTERVAL_SEC - (time.time() - loop_start)))
+            continue
+
         for pair in PAIRS:
             try:
                 process_pair(
@@ -80,6 +106,12 @@ def main():
                     state=states[pair],
                     pair_info=trade_pairs[pair],
                     logger=logger,
+                    portfolio=portfolio,
+                    portfolio_mgr=portfolio_mgr,
+                    equity=equity,
+                    last_price=prices[pair],
+                    states=states,
+                    prices=prices,
                 )
             except Exception as e:
                 logger.log_error(str(e), context={
@@ -87,12 +119,14 @@ def main():
                 })
                 print(f"[{pair}] unhandled error: {e}")
 
+        portfolio.save()
         elapsed = time.time() - loop_start
         time.sleep(max(0, LOOP_INTERVAL_SEC - elapsed))
 
 
 def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
-                 state, pair_info, logger):
+                 state, pair_info, logger, portfolio, portfolio_mgr,
+                 equity, last_price, states, prices):
 
     # ---------- 1. Binance klines ----------
     df = binance.get_klines(pair, interval=KLINE_INTERVAL, limit=KLINE_LIMIT)
@@ -102,23 +136,15 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
             symbol=pair, short_ma=None, long_ma=None,
             prev_short_ma=state.prev_short_ma,
             prev_long_ma=state.prev_long_ma,
-            atr=None, position=state.position, cash=state.cash,
-            equity=state.cash, signal="none", action="no_data",
+            atr=None, position=state.position, cash=portfolio.cash,
+            equity=equity, signal="none", action="no_data",
             extra={"bars": 0 if df is None else len(df),
                    "min_bars": min_bars},
         )
         return
 
-    # ---------- 2. Roostoo ticker ----------
-    ticker_resp = roostoo.get_ticker(pair)
-    if not ticker_resp or not ticker_resp.get("Success"):
-        logger.log_error("ticker fetch failed",
-                         context={"pair": pair, "resp": ticker_resp})
-        return
-    last_price = float(ticker_resp["Data"][pair]["LastPrice"])
-
     # ==================================================
-    # 3. LONG SIDE (unchanged from before)
+    # 2. LONG SIDE
     # ==================================================
     long_decision = long_strategy.evaluate(
         df,
@@ -140,7 +166,6 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
             long_signal = "stop"
             long_decision["reason"] = "atr_stop"
 
-    equity = compute_equity(state, last_price)
     long_action = "hold"
     long_order_id = None
 
@@ -165,14 +190,14 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                     fill = float(detail["FilledAverPrice"])
                     filled = float(detail["FilledQuantity"])
                     fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
-                    eq_before = equity
-                    state.cash += filled * fill - fee_paid
+                    eq_before = portfolio_mgr.compute_equity(states, prices)
+                    portfolio.cash += filled * fill - fee_paid
                     state.position -= filled
                     if act == "tp1":
                         state.long_tp1_done = True
                     else:
                         state.long_tp2_done = True
-                    eq_after = state.cash + state.position * fill
+                    eq_after = portfolio_mgr.compute_equity(states, prices)
                     long_action = "long_tp1" if act == "tp1" else "long_tp2"
                     long_order_id = detail["OrderID"]
                     logger.log_trade(
@@ -183,7 +208,6 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                         position_after=state.position,
                     )
                     state.save()
-                    equity = compute_equity(state, last_price)
 
     if long_signal in ("exit", "stop") and state.in_position and long_action == "hold":
         qty = round_to_precision(state.position, pair_info["AmountPrecision"])
@@ -195,8 +219,8 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                 fill = float(detail["FilledAverPrice"])
                 filled = float(detail["FilledQuantity"])
                 fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
-                eq_before = equity
-                state.cash += filled * fill - fee_paid
+                eq_before = portfolio_mgr.compute_equity(states, prices)
+                portfolio.cash += filled * fill - fee_paid
                 state.position = 0.0
                 state.entry_price = None
                 state.stop_price = None
@@ -205,7 +229,7 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                 state.long_original_qty = 0.0
                 state.long_tp1_done = False
                 state.long_tp2_done = False
-                eq_after = state.cash
+                eq_after = portfolio_mgr.compute_equity(states, prices)
                 long_action = "place_order"
                 long_order_id = detail["OrderID"]
                 logger.log_trade(
@@ -216,54 +240,59 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                     position_after=0.0,
                 )
                 state.save()
-                equity = compute_equity(state, last_price)
 
     elif (long_signal == "entry" and not state.in_position
-          and cur_atr and state.cash > 0):
+          and cur_atr and portfolio.cash > 0):
         units, stop_price = long_strategy.compute_position_size(
-            equity=equity, cash=state.cash, price=last_price, atr=cur_atr,
+            equity=equity, cash=portfolio.cash, price=last_price, atr=cur_atr,
             risk_per_trade=RISK_PER_TRADE,
             atr_stop_multiplier=ATR_STOP_MULTIPLIER,
             max_position_pct=MAX_POSITION_PCT,
             fee=TAKER_FEE,
         )
-        qty = round_to_precision(units, pair_info["AmountPrecision"])
-        if qty <= 0 or qty * last_price < pair_info["MiniOrder"]:
-            long_action = "skip_min_order"
+        planned_notional = units * last_price
+        allowed_notional, gate_reason = portfolio_mgr.allowed_entry_notional(
+            planned_notional, states, prices, equity
+        )
+        if allowed_notional <= 0:
+            long_action = "skip_" + gate_reason
         else:
-            resp = _place_market(roostoo, pair, "BUY", qty, last_price,
-                                 logger, DRY_RUN)
-            if resp and resp.get("Success"):
-                detail = resp["OrderDetail"]
-                fill = float(detail["FilledAverPrice"])
-                filled = float(detail["FilledQuantity"])
-                fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
-                eq_before = equity
-                state.cash -= filled * fill + fee_paid
-                state.position = filled
-                state.entry_price = fill
-                state.stop_price = stop_price if USE_ATR_STOP_LONG else None
-                state.stop_armed = USE_ATR_STOP_LONG
-                state.stop_armed = True
-                state.long_atr_at_entry = cur_atr
-                state.long_original_qty = filled
-                state.long_tp1_done = False
-                state.long_tp2_done = False
-                eq_after = state.cash + filled * fill
-                long_action = "place_order"
-                long_order_id = detail["OrderID"]
-                logger.log_trade(
-                    symbol=pair, side="buy", price=fill, quantity=filled,
-                    fee=fee_paid, order_id=long_order_id,
-                    signal_reason=long_decision["reason"],
-                    equity_before=eq_before, equity_after=eq_after,
-                    position_after=filled, stop_price=stop_price,
-                )
-                state.save()
-                equity = compute_equity(state, last_price)
+            units = allowed_notional / last_price
+            qty = round_to_precision(units, pair_info["AmountPrecision"])
+            if qty <= 0 or qty * last_price < pair_info["MiniOrder"]:
+                long_action = "skip_min_order"
+            else:
+                resp = _place_market(roostoo, pair, "BUY", qty, last_price,
+                                     logger, DRY_RUN)
+                if resp and resp.get("Success"):
+                    detail = resp["OrderDetail"]
+                    fill = float(detail["FilledAverPrice"])
+                    filled = float(detail["FilledQuantity"])
+                    fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
+                    eq_before = portfolio_mgr.compute_equity(states, prices)
+                    portfolio.cash -= filled * fill + fee_paid
+                    state.position = filled
+                    state.entry_price = fill
+                    state.stop_price = stop_price if USE_ATR_STOP_LONG else None
+                    state.stop_armed = USE_ATR_STOP_LONG
+                    state.long_atr_at_entry = cur_atr
+                    state.long_original_qty = filled
+                    state.long_tp1_done = False
+                    state.long_tp2_done = False
+                    eq_after = portfolio_mgr.compute_equity(states, prices)
+                    long_action = "place_order"
+                    long_order_id = detail["OrderID"]
+                    logger.log_trade(
+                        symbol=pair, side="buy", price=fill, quantity=filled,
+                        fee=fee_paid, order_id=long_order_id,
+                        signal_reason=long_decision["reason"],
+                        equity_before=eq_before, equity_after=eq_after,
+                        position_after=filled, stop_price=stop_price,
+                    )
+                    state.save()
 
     # ==================================================
-    # 4. SHORT SIDE
+    # 3. SHORT SIDE
     # ==================================================
     short_action = "hold"
     short_order_id = None
@@ -279,7 +308,7 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
         )
         short_signal = short_decision["signal"]
 
-        # ---- 4a. Exits while in short: stop / tp1 / tp2 / trail ----
+        # ---- 3a. Exits while in short: stop / tp1 / tp2 / trail ----
         if state.in_short:
             ex = short_strategy.check_short_exits(
                 price=last_price, atr_now=cur_atr or 0.0, state=state, use_stop=USE_ATR_STOP_SHORT,
@@ -289,19 +318,19 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
             if act == "stop_loss":
                 resp = roostoo.short_close(pair) if not DRY_RUN else _dry_short_close(pair, state, last_price)
                 if resp and resp.get("Success"):
-                    _apply_short_close(pair, resp, state, logger,
+                    _apply_short_close(pair, resp, state, portfolio, logger,
                                        reason="atr_stop", last_price=last_price)
                     short_action = "short_stop"
                     short_order_id = resp.get("ID") or resp.get("order_id")
                     state.save()
 
             elif act == "tp1":
-                close_pct = SHORT_TP1_FRACTION * 100.0   # 40.0
+                close_pct = SHORT_TP1_FRACTION * 100.0
                 resp = (roostoo.short_close(pair, close_pct=close_pct)
                         if not DRY_RUN
                         else _dry_short_close(pair, state, last_price, close_pct))
                 if resp and resp.get("Success"):
-                    _apply_short_close(pair, resp, state, logger,
+                    _apply_short_close(pair, resp, state, portfolio, logger,
                                        reason="tp1", last_price=last_price)
                     state.short_tp1_done = True
                     # tighten stop to breakeven after TP1
@@ -314,30 +343,26 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                     short_action = "short_tp1"
                     short_order_id = resp.get("ID")
                     state.save()
-                    equity = compute_equity(state, last_price)
 
             elif act == "tp2":
-                # close 50% of remaining (which = 30% of original)
                 remaining_frac = SHORT_TP2_FRACTION / max(
                     1e-9, (1.0 - SHORT_TP1_FRACTION)
-                ) * 100.0  # = 50.0
+                ) * 100.0
                 resp = (roostoo.short_close(pair, close_pct=remaining_frac)
                         if not DRY_RUN
                         else _dry_short_close(pair, state, last_price, remaining_frac))
                 if resp and resp.get("Success"):
-                    _apply_short_close(pair, resp, state, logger,
+                    _apply_short_close(pair, resp, state, portfolio, logger,
                                        reason="tp2", last_price=last_price)
                     state.short_tp2_done = True
                     short_action = "short_tp2"
                     short_order_id = resp.get("ID")
                     state.save()
-                    equity = compute_equity(state, last_price)
 
             elif act == "trail_update":
                 state.short_stop_price = ex["new_stop"]
                 short_action = "trail_update"
                 state.save()
-                equity = compute_equity(state, last_price)
 
             # Signal exit (golden cross) only if no stop/tp fired this bar
             if short_action == "hold" and short_signal == "short_exit":
@@ -345,62 +370,66 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                         if not DRY_RUN
                         else _dry_short_close(pair, state, last_price))
                 if resp and resp.get("Success"):
-                    _apply_short_close(pair, resp, state, logger,
+                    _apply_short_close(pair, resp, state, portfolio, logger,
                                        reason="golden_cross", last_price=last_price)
                     short_action = "short_exit"
                     short_order_id = resp.get("ID")
                     state.save()
-                    equity = compute_equity(state, last_price)
 
-        # ---- 4b. Entry ----
+        # ---- 3b. Entry ----
         elif (short_signal == "short_entry"
               and not state.in_short
               and cur_atr
-              and state.cash > 0):
+              and portfolio.cash > 0):
 
             sizing = short_strategy.compute_short_size(
                 equity=equity, price=last_price, atr=cur_atr,
                 base_risk_per_trade=RISK_PER_TRADE, fee=TAKER_FEE,
             )
             collateral = sizing["collateral"]
-            # never exceed available cash
-            collateral = min(collateral, state.cash)
-            # enforce Roostoo minimum collateral ($1)
-            if collateral < 1.0:
-                short_action = "skip_min_collateral"
+            allowed_notional, gate_reason = portfolio_mgr.allowed_entry_notional(
+                collateral, states, prices, equity
+            )
+            if allowed_notional <= 0:
+                short_action = "skip_" + gate_reason
             else:
-                resp = (roostoo.short_open(pair, collateral=collateral)
-                        if not DRY_RUN
-                        else _dry_short_open(pair, collateral, last_price))
-                if resp and resp.get("Success"):
-                    entry = float(resp.get("EntryPrice", last_price))
-                    qty   = float(resp.get("ShortQty", collateral / entry))
-                    state.cash -= collateral + float(resp.get("OpenFee", 0) or 0)
-                    state.short_position = qty
-                    state.short_entry_price = entry
-                    state.short_collateral = collateral
-                    state.short_original_qty = qty
-                    state.short_atr_at_entry = cur_atr
-                    state.short_stop_price = entry + cur_atr * SHORT_ATR_MULTIPLIER if USE_ATR_STOP_SHORT else None
-                    state.short_stop_armed = USE_ATR_STOP_SHORT
-                    state.short_tp1_done = False
-                    state.short_tp2_done = False
-                    short_action = "short_entry"
-                    short_order_id = resp.get("ID")
-                    logger.log_trade(
-                        symbol=pair, side="SHORT_OPEN", price=entry, quantity=qty,
-                        fee=float(resp.get("OpenFee", 0) or 0),
-                        order_id=str(short_order_id),
-                        signal_reason=short_decision["reason"],
-                        equity_before=equity,
-                        equity_after=state.cash,       # collateral locked
-                        position_after=-qty,
-                        stop_price=state.short_stop_price,
-                    )
-                    state.save()
+                collateral = min(allowed_notional, collateral, portfolio.cash)
+                if collateral < 1.0:
+                    short_action = "skip_min_collateral"
+                else:
+                    resp = (roostoo.short_open(pair, collateral=collateral)
+                            if not DRY_RUN
+                            else _dry_short_open(pair, collateral, last_price))
+                    if resp and resp.get("Success"):
+                        entry = float(resp.get("EntryPrice", last_price))
+                        qty   = float(resp.get("ShortQty", collateral / entry))
+                        portfolio.cash -= collateral + float(resp.get("OpenFee", 0) or 0)
+                        state.short_position = qty
+                        state.short_entry_price = entry
+                        state.short_collateral = collateral
+                        state.short_original_qty = qty
+                        state.short_atr_at_entry = cur_atr
+                        state.short_stop_price = entry + cur_atr * SHORT_ATR_MULTIPLIER if USE_ATR_STOP_SHORT else None
+                        state.short_stop_armed = USE_ATR_STOP_SHORT
+                        state.short_tp1_done = False
+                        state.short_tp2_done = False
+                        short_action = "short_entry"
+                        short_order_id = resp.get("ID")
+                        eq_after = portfolio_mgr.compute_equity(states, prices)
+                        logger.log_trade(
+                            symbol=pair, side="SHORT_OPEN", price=entry, quantity=qty,
+                            fee=float(resp.get("OpenFee", 0) or 0),
+                            order_id=str(short_order_id),
+                            signal_reason=short_decision["reason"],
+                            equity_before=portfolio_mgr.compute_equity(states, prices),
+                            equity_after=eq_after,
+                            position_after=-qty,
+                            stop_price=state.short_stop_price,
+                        )
+                        state.save()
 
     # ==================================================
-    # 5. Persist MA snapshot + heartbeat
+    # 4. Persist MA snapshot + heartbeat
     # ==================================================
     state.prev_short_ma = float(cur_short_ma) if cur_short_ma is not None else None
     state.prev_long_ma  = float(cur_long_ma)  if cur_long_ma  is not None else None
@@ -411,8 +440,8 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
         short_ma=cur_short_ma, long_ma=cur_long_ma,
         prev_short_ma=long_decision["prev_short_ma"],
         prev_long_ma=long_decision["prev_long_ma"],
-        atr=cur_atr, position=state.position, cash=state.cash,
-        equity=equity,
+        atr=cur_atr, position=state.position, cash=portfolio.cash,
+        equity=portfolio_mgr.compute_equity(states, prices),
         signal=f"L:{long_signal}|S:{short_signal}",
         action=f"L:{long_action}|S:{short_action}",
         order_id=long_order_id or short_order_id,
@@ -427,6 +456,8 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
             "short_entry_price": state.short_entry_price,
             "long_atr_at_entry": state.long_atr_at_entry,
             "long_original_qty": state.long_original_qty,
+            "breaker_active": portfolio.breaker_active,
+            "peak_equity": portfolio.peak_equity,
         },
     )
 
@@ -435,15 +466,7 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
 # Helpers
 # =========================================================
 
-def compute_equity(state, last_price):
-    """Equity = cash + long value + short collateral + short unrealized PnL."""
-    long_value = state.position * last_price
-    short_pnl = 0.0
-    if state.short_position > 0 and state.short_entry_price is not None:
-        short_pnl = state.short_position * (state.short_entry_price - last_price)
-    return state.cash + long_value + state.short_collateral + short_pnl
-
-def _apply_short_close(pair, resp, state, logger, reason, last_price):
+def _apply_short_close(pair, resp, state, portfolio, logger, reason, last_price):
     """Update state after a short_close response."""
     closed_qty  = float(resp.get("ClosedQty", 0))
     close_price = float(resp.get("ClosePrice", last_price))
@@ -451,8 +474,8 @@ def _apply_short_close(pair, resp, state, logger, reason, last_price):
     return_amount = float(resp.get("ReturnAmount", 0))
     fully_closed = bool(resp.get("FullyClosed", False))
 
-    eq_before = state.cash + state.short_position * close_price
-    state.cash += return_amount
+    eq_before = portfolio.cash + state.short_position * close_price
+    portfolio.cash += return_amount
     if fully_closed:
         state.short_position = 0.0
         state.short_entry_price = None
@@ -466,7 +489,7 @@ def _apply_short_close(pair, resp, state, logger, reason, last_price):
         state.short_position -= closed_qty
         state.short_collateral -= closed_qty * close_price
 
-    eq_after = state.cash + state.short_position * close_price
+    eq_after = portfolio.cash + state.short_position * close_price
 
     logger.log_trade(
         symbol=pair, side="SHORT_CLOSE", price=close_price,

@@ -11,3 +11,4 @@ logs/
 backtest.py
 backtest_out/
 data/
+docs/
