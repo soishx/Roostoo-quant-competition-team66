@@ -1,7 +1,7 @@
 # state.py
 import json
 import os
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from typing import Optional
 
 from config import STATE_DIR, INITIAL_CASH
@@ -82,6 +82,38 @@ class PortfolioState:
     @classmethod
     def load(cls) -> "PortfolioState":
         path = os.path.join(STATE_DIR, "state_PORTFOLIO.json")
+        if not os.path.exists(path):
+            return cls()
+        with open(path) as f:
+            data = json.load(f)
+        known = {k: v for k, v in data.items() if k in cls.__dataclass_fields__}
+        return cls(**known)
+
+
+@dataclass
+class LeadLagState:
+    """State for the lead-lag (teammate) strategy pool.
+
+    Pending orders and rich position metadata (stop / TP / time-exit) live
+    here. The *quantity* held is mirrored into PairState.position via the
+    shared wallet reconciliation, so the PortfolioManager always sees it.
+
+    Persisted to logs/state/state_LEADLAG.json.
+    """
+    pending: dict = field(default_factory=dict)
+    positions: dict = field(default_factory=dict)
+    last_signal_times: dict = field(default_factory=dict)
+    last_processed_1m: Optional[str] = None
+    last_processed_15m: Optional[str] = None
+
+    def save(self):
+        path = os.path.join(STATE_DIR, "state_LEADLAG.json")
+        with open(path, "w") as f:
+            json.dump(asdict(self), f, indent=2)
+
+    @classmethod
+    def load(cls) -> "LeadLagState":
+        path = os.path.join(STATE_DIR, "state_LEADLAG.json")
         if not os.path.exists(path):
             return cls()
         with open(path) as f:

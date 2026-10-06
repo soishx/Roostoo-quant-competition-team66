@@ -4,9 +4,11 @@ import traceback
 from datetime import datetime, timezone
 
 from config import (
-    PAIRS, SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD,
+    MA_PAIRS, ALL_PAIRS,
+    SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD,
     RISK_PER_TRADE, ATR_STOP_MULTIPLIER, MAX_POSITION_PCT,
-    TAKER_FEE, LOOP_INTERVAL_SEC, KLINE_INTERVAL, KLINE_LIMIT,
+    TAKER_FEE, LOOP_INTERVAL_SEC, LEADLAG_LOOP_SECONDS,
+    KLINE_INTERVAL, KLINE_LIMIT,
     DRY_RUN, BINANCE_SYMBOL_MAP, USE_ATR_STOP_LONG, USE_ATR_STOP_SHORT,
     # long take-profit
     LONG_TP_ENABLED, LONG_TP1_ATR, LONG_TP1_FRACTION,
@@ -19,8 +21,9 @@ from config import (
 from exchange_client import RoostooClient
 from market_data import BinanceDataClient
 from strategy import MAStrategy, MAShortStrategy
-from state import PairState, PortfolioState
+from state import PairState, PortfolioState, LeadLagState
 from portfolio import PortfolioManager
+from lead_lag_strategy import LeadLagTrader
 from trade_logger import TradeLogger
 
 
@@ -37,7 +40,7 @@ def main():
     trade_pairs = info["TradePairs"]
     print(f"[startup] Roostoo pairs: {list(trade_pairs.keys())}")
 
-    for p in PAIRS:
+    for p in ALL_PAIRS:
         if p not in trade_pairs:
             raise RuntimeError(f"{p} not available on Roostoo")
         if p not in BINANCE_SYMBOL_MAP:
@@ -47,7 +50,7 @@ def main():
         p: MAStrategy(SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD,
                       LONG_TP1_ATR, LONG_TP1_FRACTION,
                       LONG_TP2_ATR, LONG_TP2_FRACTION)
-        for p in PAIRS
+        for p in MA_PAIRS
     }
     short_strats = {
         p: MAShortStrategy(
@@ -63,65 +66,89 @@ def main():
             tp2_fraction=SHORT_TP2_FRACTION,
             trail_activation_atr=SHORT_TRAIL_ACTIVATION_ATR,
         )
-        for p in PAIRS
+        for p in MA_PAIRS
     }
-    states = {p: PairState.load(p) for p in PAIRS}
+    states = {p: PairState.load(p) for p in ALL_PAIRS}
     portfolio = PortfolioState.load()
     portfolio_mgr = PortfolioManager(portfolio)
+    leadlag_state = LeadLagState.load()
     logger = TradeLogger(log_dir="logs")
+    leadlag = LeadLagTrader(roostoo, binance, portfolio_mgr, logger, leadlag_state, trade_pairs)
+
+    last_ma_run = 0.0
 
     while True:
-        loop_start = time.time()
-
-        # ---- Portfolio-level: reconcile cash+positions, equity, breaker ----
         try:
-            wallet = roostoo.get_balance()
-            short_positions = roostoo.get_short_positions()
-            ticker_resp = roostoo.get_ticker()
-            if not ticker_resp or not ticker_resp.get("Success"):
-                raise RuntimeError(f"ticker fetch failed: {ticker_resp}")
-            prices = {p: float(ticker_resp["Data"][p]["LastPrice"]) for p in PAIRS}
+            loop_start = time.time()
 
-            portfolio_mgr.reconcile(wallet, short_positions, states)
-            equity = portfolio_mgr.compute_equity(states, prices)
-            drawdown = portfolio_mgr.update_breaker(equity)
-            if portfolio.breaker_active:
-                print(f"[portfolio] breaker ACTIVE  equity={equity:.2f} dd={drawdown:.4f}")
-        except Exception as e:
-            logger.log_error("portfolio reconcile failed",
-                             context={"err": str(e), "trace": traceback.format_exc()})
-            print(f"[portfolio] reconcile failed: {e}")
-            portfolio.save()
-            time.sleep(max(0, LOOP_INTERVAL_SEC - (time.time() - loop_start)))
-            continue
-
-        for pair in PAIRS:
+            # ---- Portfolio-level: reconcile cash+positions, equity, breaker ----
             try:
-                process_pair(
-                    pair=pair,
-                    roostoo=roostoo,
-                    binance=binance,
-                    long_strategy=long_strats[pair],
-                    short_strategy=short_strats[pair],
-                    state=states[pair],
-                    pair_info=trade_pairs[pair],
-                    logger=logger,
-                    portfolio=portfolio,
-                    portfolio_mgr=portfolio_mgr,
-                    equity=equity,
-                    last_price=prices[pair],
-                    states=states,
-                    prices=prices,
-                )
-            except Exception as e:
-                logger.log_error(str(e), context={
-                    "pair": pair, "trace": traceback.format_exc()
-                })
-                print(f"[{pair}] unhandled error: {e}")
+                wallet = roostoo.get_balance()
+                short_positions = roostoo.get_short_positions()
+                ticker_resp = roostoo.get_ticker()
+                if not ticker_resp or not ticker_resp.get("Success"):
+                    raise RuntimeError(f"ticker fetch failed: {ticker_resp}")
+                ticker_data = ticker_resp["Data"]
+                prices = {p: float(ticker_data[p]["LastPrice"]) for p in ALL_PAIRS}
 
-        portfolio.save()
-        elapsed = time.time() - loop_start
-        time.sleep(max(0, LOOP_INTERVAL_SEC - elapsed))
+                portfolio_mgr.reconcile(wallet, short_positions, states)
+                equity = portfolio_mgr.compute_equity(states, prices)
+                drawdown = portfolio_mgr.update_breaker(equity)
+                if portfolio.breaker_active:
+                    print(f"[portfolio] breaker ACTIVE  equity={equity:.2f} dd={drawdown:.4f}")
+            except Exception as e:
+                logger.log_error("portfolio reconcile failed",
+                                 context={"err": str(e), "trace": traceback.format_exc()})
+                print(f"[portfolio] reconcile failed: {e}")
+                portfolio.save()
+                leadlag_state.save()
+                time.sleep(max(0, LEADLAG_LOOP_SECONDS - (time.time() - loop_start)))
+                continue
+
+            # ---- Lead-lag pool (every loop, ~5s) ----
+            try:
+                leadlag.run_once(ticker_data, prices, states, equity)
+            except Exception as e:
+                logger.log_error("leadlag pool error",
+                                 context={"err": str(e), "trace": traceback.format_exc()})
+                print(f"[leadlag] unhandled error: {e}")
+
+            # ---- MA pool (every LOOP_INTERVAL_SEC, ~300s) ----
+            if time.time() - last_ma_run >= LOOP_INTERVAL_SEC:
+                last_ma_run = time.time()
+                for pair in MA_PAIRS:
+                    try:
+                        process_pair(
+                            pair=pair,
+                            roostoo=roostoo,
+                            binance=binance,
+                            long_strategy=long_strats[pair],
+                            short_strategy=short_strats[pair],
+                            state=states[pair],
+                            pair_info=trade_pairs[pair],
+                            logger=logger,
+                            portfolio=portfolio,
+                            portfolio_mgr=portfolio_mgr,
+                            equity=equity,
+                            last_price=prices[pair],
+                            states=states,
+                            prices=prices,
+                        )
+                    except Exception as e:
+                        logger.log_error(str(e), context={
+                            "pair": pair, "trace": traceback.format_exc()
+                        })
+                        print(f"[{pair}] unhandled error: {e}")
+
+            portfolio.save()
+            leadlag_state.save()
+            elapsed = time.time() - loop_start
+            time.sleep(max(0, LEADLAG_LOOP_SECONDS - elapsed))
+        except KeyboardInterrupt:
+            portfolio.save()
+            leadlag_state.save()
+            print("[bot] stopped by user")
+            break
 
 
 def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
@@ -333,7 +360,6 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                     _apply_short_close(pair, resp, state, portfolio, logger,
                                        reason="tp1", last_price=last_price)
                     state.short_tp1_done = True
-                    # tighten stop to breakeven after TP1
                     if (state.short_entry_price is not None
                             and state.short_atr_at_entry is not None):
                         state.short_stop_price = (
@@ -487,7 +513,10 @@ def _apply_short_close(pair, resp, state, portfolio, logger, reason, last_price)
         state.short_tp2_done = False
     else:
         state.short_position -= closed_qty
-        state.short_collateral -= closed_qty * close_price
+        if "RemainingCollateral" in resp:
+            state.short_collateral = float(resp.get("RemainingCollateral", 0) or 0)
+        else:
+            state.short_collateral -= closed_qty * close_price
 
     eq_after = portfolio.cash + state.short_position * close_price
 

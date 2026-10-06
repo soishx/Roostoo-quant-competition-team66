@@ -43,7 +43,7 @@ class TradeLogger:
                     "timestamp_hkt", "symbol", "side", "price", "quantity",
                     "notional", "fee", "slippage_bps", "order_id",
                     "signal_reason", "equity_before", "equity_after",
-                    "position_after", "stop_price",
+                    "position_after", "stop_price", "note",
                 ])
 
     # --------------------------------------------------
@@ -77,8 +77,8 @@ class TradeLogger:
             "position": _f(position),
             "cash": _f(cash),
             "equity": _f(equity),
-            "signal": signal,       # "entry" | "exit" | "stop" | "none"
-            "action": action,       # "place_order" | "hold" | "error"
+            "signal": signal,
+            "action": action,
             "order_id": order_id,
         }
         if extra:
@@ -105,6 +105,7 @@ class TradeLogger:
         position_after,
         stop_price=None,
         slippage_bps=None,
+        note=None,
     ):
         notional = price * quantity
         row = [
@@ -122,6 +123,7 @@ class TradeLogger:
             f"{equity_after:.2f}",
             f"{position_after:.8f}",
             f"{stop_price:.8f}" if stop_price is not None else "",
+            note or "",
         ]
         with self._lock:
             with open(self.trades_path, "a", newline="") as f:
