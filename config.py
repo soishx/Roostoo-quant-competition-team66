@@ -44,7 +44,7 @@ LONG_MA_HOURS       = 48
 ATR_PERIOD          = 24
 RISK_PER_TRADE      = 0.005
 ATR_STOP_MULTIPLIER = 3.0
-MAX_POSITION_PCT    = 0.07
+MAX_POSITION_PCT    = 0.15
 
 # ---------------- Portfolio-level risk ----------------
 MAX_TOTAL_EXPOSURE  = 0.60   # total gross exposure cap (fraction of portfolio equity)
@@ -130,7 +130,7 @@ SHORT_ENABLED = True
 SHORT_RISK_SCALE = 0.5
 
 # Hard cap: short notional <= equity * SHORT_MAX_POSITION_PCT
-SHORT_MAX_POSITION_PCT = 0.07
+SHORT_MAX_POSITION_PCT = 0.15
 
 # Stop: tighter than long (long uses 1.5)
 SHORT_ATR_MULTIPLIER = 2.5
