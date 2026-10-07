@@ -51,7 +51,7 @@ MAX_TOTAL_EXPOSURE  = 0.60   # total gross exposure cap (fraction of portfolio e
 DRAWDOWN_TRIGGER    = 0.10   # circuit breaker triggers at this drawdown from peak
 DRAWDOWN_RECOVER    = 0.05   # circuit breaker recovers below this drawdown
 
-# ---------------- Lead-lag strategy (teammate's bStock pool) ----------------
+# ---------------- Lead-lag strategy ----------------
 LEADLAG_POSITION_FRACTION    = 0.05     # each slot = 5% of portfolio equity
 LEADLAG_MAX_SLOTS            = 4        # max positions + pending  (=> 20% cap)
 LEADLAG_MAX_PRICE_DIVERGENCE = 0.01     # skip if Binance/Roostoo diverge > 1%
@@ -59,47 +59,47 @@ LEADLAG_KLINE_LIMIT          = 500      # 15m breakout needs >= 390 bars
 LEADLAG_LOOP_SECONDS         = 5        # lead-lag signal cadence (merged loop)
 
 # BroadLeadLag (1m)
-LEADLAG_BLL_EMA_SPAN     = 60
-LEADLAG_BLL_PEER_RET     = 0.004
-LEADLAG_BLL_LAG          = 0.001
+LEADLAG_BLL_EMA_SPAN     = 30
+LEADLAG_BLL_PEER_RET     = 0.002
+LEADLAG_BLL_LAG          = 0.0005
 LEADLAG_BLL_MIN_PEERS    = 4
 LEADLAG_BLL_MIN_BARS     = 100
-LEADLAG_BLL_COOLDOWN     = 600
-LEADLAG_BLL_ENTRY_OFFSET = 0.0003
+LEADLAG_BLL_COOLDOWN     = 180
+LEADLAG_BLL_ENTRY_OFFSET = 0.0
 LEADLAG_BLL_ATR_PERIOD   = 14
 LEADLAG_BLL_STOP_ATR     = 0.5
 LEADLAG_BLL_TP_ATR       = 6.0
-LEADLAG_BLL_EXPIRY       = 60
+LEADLAG_BLL_EXPIRY       = 120
 
 # MU->AMD (1m)
-LEADLAG_MU2AMD_RET          = 0.005
-LEADLAG_MU2AMD_LAG          = 0.001
+LEADLAG_MU2AMD_RET          = 0.003
+LEADLAG_MU2AMD_LAG          = 0.0005
 LEADLAG_MU2AMD_ENTRY_OFFSET = 0.0
 LEADLAG_MU2AMD_TIME_EXIT    = 20 * 60
-LEADLAG_MU2AMD_EXPIRY       = 60
+LEADLAG_MU2AMD_EXPIRY       = 180
 
 # AMD->MU (1m, 08:00-14:00 UTC)
-LEADLAG_AMD2MU_WINDOW_START = 8
-LEADLAG_AMD2MU_WINDOW_END   = 14
-LEADLAG_AMD2MU_RET          = 0.0075
+LEADLAG_AMD2MU_WINDOW_START = 7
+LEADLAG_AMD2MU_WINDOW_END   = 16
+LEADLAG_AMD2MU_RET          = 0.004
 LEADLAG_AMD2MU_RET_BARS     = 3
-LEADLAG_AMD2MU_LAG          = 0.001
-LEADLAG_AMD2MU_COOLDOWN     = 600
-LEADLAG_AMD2MU_ENTRY_OFFSET = 0.0003
+LEADLAG_AMD2MU_LAG          = 0.0005
+LEADLAG_AMD2MU_COOLDOWN     = 180
+LEADLAG_AMD2MU_ENTRY_OFFSET = 0.0
 LEADLAG_AMD2MU_TIME_EXIT    = 20 * 60
-LEADLAG_AMD2MU_EXPIRY       = 60
+LEADLAG_AMD2MU_EXPIRY       = 180
 
 # Breakout (15m)
 LEADLAG_BO_EMA_SPAN     = 96
 LEADLAG_BO_MIN_BARS     = 390
-LEADLAG_BO_BREADTH      = 5
-LEADLAG_BO_R3D_BARS     = 289
-LEADLAG_BO_BREAK_MULT   = 1.001
+LEADLAG_BO_BREADTH      = 3
+LEADLAG_BO_R3D_BARS     = 192
+LEADLAG_BO_BREAK_MULT   = 1.0002
 LEADLAG_BO_ATR_PERIOD   = 14
-LEADLAG_BO_ENTRY_OFFSET = 0.005
+LEADLAG_BO_ENTRY_OFFSET = 0.0015
 LEADLAG_BO_STOP_ATR     = 0.5
 LEADLAG_BO_TP_ATR       = 4.0
-LEADLAG_BO_EXPIRY       = 30 * 60
+LEADLAG_BO_EXPIRY       = 3600
 
 # ---------------- Fees / Slippage ----------------
 MAKER_FEE = 0.0005   # limit order fee (0.05%)
