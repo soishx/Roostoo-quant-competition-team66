@@ -17,7 +17,9 @@ BINANCE_SYMBOL_MAP = {
     "ETH/USD": "ETHUSDT",
     "SOL/USD": "SOLUSDT",
     "BNB/USD": "BNBUSDT",
-    "BONK/USD": "BONKUSDT",
+    "XRP/USD": "XRPUSDT",
+    "ADA/USD": "ADAUSDT",
+    "ZEC/USD": "ZECUSDT",
     "AMDB/USD": "AMDBUSDT",
     "CRCLB/USD": "CRCLBUSDT",
     "GOOGLB/USD": "GOOGLBUSDT",
@@ -31,7 +33,7 @@ BINANCE_SYMBOL_MAP = {
 
 # ---------------- Trading (asset pools by strategy) ----------------
 # MA strategy universe — user may add bStock pairs here manually.
-MA_PAIRS      = ["ETH/USD", "BTC/USD", "SOL/USD", "BNB/USD", "AMDB/USD", "CRCLB/USD", "GOOGLB/USD", "INTCB/USD", "METAB/USD"]
+MA_PAIRS      = ["ETH/USD", "BTC/USD", "SOL/USD", "BNB/USD", "ZEC/USD", "ADA/USD", "XRP/USD", "AMDB/USD", "CRCLB/USD", "GOOGLB/USD", "INTCB/USD", "METAB/USD"]
 # Lead-lag strategy universe — teammate's semiconductor stocks.
 LEADLAG_PAIRS = ["AMDB/USD", "INTCB/USD", "MUB/USD", "NVDAB/USD", "SKHYB/USD", "SNDKB/USD"]
 # Union of both pools — used for reconciliation, tickers, and data fetching.
