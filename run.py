@@ -268,56 +268,6 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                 )
                 state.save()
 
-    elif (long_signal == "entry" and not state.in_position
-          and cur_atr and portfolio.cash > 0):
-        units, stop_price = long_strategy.compute_position_size(
-            equity=equity, cash=portfolio.cash, price=last_price, atr=cur_atr,
-            risk_per_trade=RISK_PER_TRADE,
-            atr_stop_multiplier=ATR_STOP_MULTIPLIER,
-            max_position_pct=MAX_POSITION_PCT,
-            fee=TAKER_FEE,
-        )
-        planned_notional = units * last_price
-        allowed_notional, gate_reason = portfolio_mgr.allowed_entry_notional(
-            planned_notional, states, prices, equity
-        )
-        if allowed_notional <= 0:
-            long_action = "skip_" + gate_reason
-        else:
-            units = allowed_notional / last_price
-            qty = round_to_precision(units, pair_info["AmountPrecision"])
-            if qty <= 0 or qty * last_price < pair_info["MiniOrder"]:
-                long_action = "skip_min_order"
-            else:
-                resp = _place_market(roostoo, pair, "BUY", qty, last_price,
-                                     logger, DRY_RUN)
-                if resp and resp.get("Success"):
-                    detail = resp["OrderDetail"]
-                    fill = float(detail["FilledAverPrice"])
-                    filled = float(detail["FilledQuantity"])
-                    fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
-                    eq_before = portfolio_mgr.compute_equity(states, prices)
-                    portfolio.cash -= filled * fill + fee_paid
-                    state.position = filled
-                    state.entry_price = fill
-                    state.stop_price = stop_price if USE_ATR_STOP_LONG else None
-                    state.stop_armed = USE_ATR_STOP_LONG
-                    state.long_atr_at_entry = cur_atr
-                    state.long_original_qty = filled
-                    state.long_tp1_done = False
-                    state.long_tp2_done = False
-                    eq_after = portfolio_mgr.compute_equity(states, prices)
-                    long_action = "place_order"
-                    long_order_id = detail["OrderID"]
-                    logger.log_trade(
-                        symbol=pair, side="buy", price=fill, quantity=filled,
-                        fee=fee_paid, order_id=long_order_id,
-                        signal_reason=long_decision["reason"],
-                        equity_before=eq_before, equity_after=eq_after,
-                        position_after=filled, stop_price=stop_price,
-                    )
-                    state.save()
-
     # ==================================================
     # 3. SHORT SIDE
     # ==================================================
@@ -453,6 +403,57 @@ def process_pair(pair, roostoo, binance, long_strategy, short_strategy,
                             stop_price=state.short_stop_price,
                         )
                         state.save()
+
+    # ---- Long entry (golden cross) — after exits, so flips are clean ----
+    if (long_signal == "entry" and not state.in_position
+            and cur_atr and portfolio.cash > 0):
+        units, stop_price = long_strategy.compute_position_size(
+            equity=equity, cash=portfolio.cash, price=last_price, atr=cur_atr,
+            risk_per_trade=RISK_PER_TRADE,
+            atr_stop_multiplier=ATR_STOP_MULTIPLIER,
+            max_position_pct=MAX_POSITION_PCT,
+            fee=TAKER_FEE,
+        )
+        planned_notional = units * last_price
+        allowed_notional, gate_reason = portfolio_mgr.allowed_entry_notional(
+            planned_notional, states, prices, equity
+        )
+        if allowed_notional <= 0:
+            long_action = "skip_" + gate_reason
+        else:
+            units = allowed_notional / last_price
+            qty = round_to_precision(units, pair_info["AmountPrecision"])
+            if qty <= 0 or qty * last_price < pair_info["MiniOrder"]:
+                long_action = "skip_min_order"
+            else:
+                resp = _place_market(roostoo, pair, "BUY", qty, last_price,
+                                     logger, DRY_RUN)
+                if resp and resp.get("Success"):
+                    detail = resp["OrderDetail"]
+                    fill = float(detail["FilledAverPrice"])
+                    filled = float(detail["FilledQuantity"])
+                    fee_paid = float(detail.get("CommissionChargeValue", 0) or 0)
+                    eq_before = portfolio_mgr.compute_equity(states, prices)
+                    portfolio.cash -= filled * fill + fee_paid
+                    state.position = filled
+                    state.entry_price = fill
+                    state.stop_price = stop_price if USE_ATR_STOP_LONG else None
+                    state.stop_armed = USE_ATR_STOP_LONG
+                    state.long_atr_at_entry = cur_atr
+                    state.long_original_qty = filled
+                    state.long_tp1_done = False
+                    state.long_tp2_done = False
+                    eq_after = portfolio_mgr.compute_equity(states, prices)
+                    long_action = "place_order"
+                    long_order_id = detail["OrderID"]
+                    logger.log_trade(
+                        symbol=pair, side="buy", price=fill, quantity=filled,
+                        fee=fee_paid, order_id=long_order_id,
+                        signal_reason=long_decision["reason"],
+                        equity_before=eq_before, equity_after=eq_after,
+                        position_after=filled, stop_price=stop_price,
+                    )
+                    state.save()
 
     # ==================================================
     # 4. Persist MA snapshot + heartbeat
