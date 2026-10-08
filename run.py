@@ -7,7 +7,7 @@ from config import (
     MA_PAIRS, ALL_PAIRS,
     SHORT_MA_HOURS, LONG_MA_HOURS, ATR_PERIOD,
     RISK_PER_TRADE, ATR_STOP_MULTIPLIER, MAX_POSITION_PCT,
-    TAKER_FEE, LOOP_INTERVAL_SEC, LEADLAG_LOOP_SECONDS,
+    TAKER_FEE, LOOP_INTERVAL_SEC, LEADLAG_LOOP_SECONDS, LEADLAG_ENABLED,
     KLINE_INTERVAL, KLINE_LIMIT,
     DRY_RUN, BINANCE_SYMBOL_MAP, USE_ATR_STOP_LONG, USE_ATR_STOP_SHORT,
     # long take-profit
@@ -107,7 +107,7 @@ def main():
 
             # ---- Lead-lag pool (every loop, ~5s) ----
             try:
-                leadlag.run_once(ticker_data, prices, states, equity)
+                leadlag.run_once(ticker_data, prices, states, equity, allow_entries=LEADLAG_ENABLED)
             except Exception as e:
                 logger.log_error("leadlag pool error",
                                  context={"err": str(e), "trace": traceback.format_exc()})

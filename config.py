@@ -54,6 +54,7 @@ DRAWDOWN_TRIGGER    = 0.10   # circuit breaker triggers at this drawdown from pe
 DRAWDOWN_RECOVER    = 0.05   # circuit breaker recovers below this drawdown
 
 # ---------------- Lead-lag strategy ----------------
+LEADLAG_ENABLED              = False    # toggle: False = stop new entries (still closes existing positions)
 LEADLAG_POSITION_FRACTION    = 0.05     # each slot = 5% of portfolio equity
 LEADLAG_MAX_SLOTS            = 4        # max positions + pending  (=> 20% cap)
 LEADLAG_MAX_PRICE_DIVERGENCE = 0.01     # skip if Binance/Roostoo diverge > 1%

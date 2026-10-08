@@ -641,22 +641,26 @@ class LeadLagTrader:
         self.state.save()
 
     # ---- per-loop entry point ----
-    def run_once(self, tickers, prices, states, equity):
+    def run_once(self, tickers, prices, states, equity, allow_entries=True):
         self.tickers = tickers
         self.prices = prices
         self.states = states
         self.equity = equity
 
+        # Exits always run, so existing positions still get closed (stop/TP/
+        # time) even when new entries are toggled off.
         self.manage_pending()
         self.manage_positions()
-        self.refresh_market_data()
 
-        signals = self.evaluate_1m() + self.evaluate_15m()
+        if allow_entries:
+            self.refresh_market_data()
 
-        priority = {"BroadLeadLag": 0, "Breakout": 1, "MU→AMD": 2, "AMD→MU": 3}
-        signals.sort(key=lambda s: priority.get(s.strategy, 99))
+            signals = self.evaluate_1m() + self.evaluate_15m()
 
-        for signal in signals:
-            self.submit_signal(signal)
+            priority = {"BroadLeadLag": 0, "Breakout": 1, "MU→AMD": 2, "AMD→MU": 3}
+            signals.sort(key=lambda s: priority.get(s.strategy, 99))
+
+            for signal in signals:
+                self.submit_signal(signal)
 
         self.save()
